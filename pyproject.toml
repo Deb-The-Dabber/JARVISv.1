@@ -21,8 +21,7 @@ filterwarnings = [
 ]
 
 [tool.ruff]
-line-length = 200
-extend-ignore = ["E402", "E731", "E741", "F841"]
+line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
