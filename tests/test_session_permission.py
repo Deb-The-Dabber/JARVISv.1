@@ -26,23 +26,33 @@ from safety import (
 
 
 class Colors:
-    HEADER = '\033[95m'; OKBLUE = '\033[94m'; OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'; WARNING = '\033[93m'; FAIL = '\033[91m'
-    ENDC = '\033[0m'; BOLD = '\033[1m'
+    HEADER = "\033[95m"
+    OKBLUE = "\033[94m"
+    OKCYAN = "\033[96m"
+    OKGREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+
 
 def log(msg, color=Colors.ENDC):
     print(f"{color}{msg}{Colors.ENDC}")
 
+
 def section(title):
-    print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
+    print(f"\n{Colors.HEADER}{'=' * 60}{Colors.ENDC}")
     log(f"  {title}", Colors.BOLD)
-    print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}\n")
+    print(f"{Colors.HEADER}{'=' * 60}{Colors.ENDC}\n")
+
 
 def test_result(name, passed, details=""):
     status = f"{Colors.OKGREEN}✓ PASS{Colors.ENDC}" if passed else f"{Colors.FAIL}✗ FAIL{Colors.ENDC}"
     print(f"  {status}: {name}")
-    if details: print(f"         {details}")
+    if details:
+        print(f"         {details}")
     return passed
+
 
 def test_basic_confirmation():
     section("TEST 1: Basic Confirmation Flow")
@@ -61,6 +71,7 @@ def test_basic_confirmation():
     except NeedsConfirmation:
         return test_result("Session confirmation persists", False, "Still raised NeedsConfirmation")
 
+
 def test_session_multiple_tools():
     section("TEST 2: Multiple WARNING Tools")
     reset_session()
@@ -77,6 +88,7 @@ def test_session_multiple_tools():
     except NeedsConfirmation:
         log("  click_on_screen raised NeedsConfirmation (correct)")
         return test_result("Different tool asks separately", True)
+
 
 def test_dangerous_always_confirm():
     section("TEST 3: DANGEROUS Tools Always Ask")
@@ -96,6 +108,7 @@ def test_dangerous_always_confirm():
     except NeedsConfirmation:
         log("  DANGEROUS still asks after session confirm")
         return test_result("DANGEROUS behavior", True)
+
 
 def test_safe_never_confirm():
     section("TEST 4: SAFE Tools Never Ask")
@@ -117,6 +130,7 @@ def test_safe_never_confirm():
             all_passed = False
     return test_result("SAFE tools bypass confirmation", all_passed)
 
+
 def test_audit_logging():
     section("TEST 5: Audit Log Entries")
     reset_session()
@@ -135,12 +149,18 @@ def test_audit_logging():
     log("  No audit log entries found")
     return test_result("Audit log captures confirmation requests", False)
 
+
 def test_permission_levels():
     section("TEST 6: TOOL_PERMISSIONS Dictionary")
     expected_levels = {
-        "get_weather": SAFE, "get_weather_detailed": SAFE, "get_system_info": SAFE,
-        "open_app": SAFE, "quit_app": WARNING, "browser_navigate": SAFE,
-        "click_on_screen": WARNING, "send_imessage": DANGEROUS,
+        "get_weather": SAFE,
+        "get_weather_detailed": SAFE,
+        "get_system_info": SAFE,
+        "open_app": SAFE,
+        "quit_app": WARNING,
+        "browser_navigate": SAFE,
+        "click_on_screen": WARNING,
+        "send_imessage": DANGEROUS,
     }
     all_passed = True
     for tool, expected in expected_levels.items():
@@ -151,6 +171,7 @@ def test_permission_levels():
             log(f"  ✗ {tool:25s} -> {actual} (expected {expected})")
             all_passed = False
     return test_result("All permission levels correct", all_passed)
+
 
 def test_session_state():
     section("TEST 7: Session State Management")
@@ -167,17 +188,17 @@ def test_session_state():
     log(f"  is_session_confirmed('click_on_screen') = {c3}")
     return test_result("Session state management", c1 == False and c2 == True and c3 == False)
 
+
 if __name__ == "__main__":
-    print(f"\n{Colors.BOLD}{'='*60}")
+    print(f"\n{Colors.BOLD}{'=' * 60}")
     print("  SESSION PERMISSION CONSISTENCY TEST SUITE")
-    print(f"{'='*60}{Colors.ENDC}\n")
-    results = [f() for f in [
-        test_basic_confirmation, test_session_multiple_tools,
-        test_dangerous_always_confirm, test_safe_never_confirm,
-        test_audit_logging, test_permission_levels, test_session_state
-    ]]
+    print(f"{'=' * 60}{Colors.ENDC}\n")
+    results = [
+        f() for f in [test_basic_confirmation, test_session_multiple_tools, test_dangerous_always_confirm, test_safe_never_confirm, test_audit_logging, test_permission_levels, test_session_state]
+    ]
     section("SUMMARY")
-    passed = sum(results); total = len(results)
+    passed = sum(results)
+    total = len(results)
     if passed == total:
         log(f"  {Colors.OKGREEN}All {total} tests passed!{Colors.ENDC}", Colors.BOLD)
     else:

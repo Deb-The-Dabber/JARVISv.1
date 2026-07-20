@@ -1,4 +1,3 @@
-
 import requests
 
 from config import GOOGLE_MAPS_API_KEY

@@ -45,10 +45,7 @@ end tell
 '''
     _, run_err = _run_applescript(script)
     if run_err:
-        return (
-            f"Quick-switch may have failed: {run_err[:200]}. "
-            "Grant Accessibility permission and ensure Discord is open in the browser."
-        )
+        return f"Quick-switch may have failed: {run_err[:200]}. Grant Accessibility permission and ensure Discord is open in the browser."
     time.sleep(0.5)
     return f"Opened Discord channel matching '{channel_name}'."
 
@@ -63,13 +60,13 @@ def discord_send_message(text: str, browser: str = DEFAULT_BROWSER):
 
     msg = text.strip()
     subprocess.run(["pbcopy"], input=msg.encode("utf-8"), check=True)
-    script = '''
+    script = """
 tell application "System Events"
     keystroke "v" using command down
     delay 0.25
     keystroke return
 end tell
-'''
+"""
     _, run_err = _run_applescript(script)
     if run_err:
         return f"Couldn't send message: {run_err[:200]}"

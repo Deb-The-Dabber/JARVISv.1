@@ -80,7 +80,4 @@ class TokenStore:
 
     @classmethod
     def get_all_status(cls) -> Dict[str, bool]:
-        return {
-            provider: cls.is_configured(provider)
-            for provider in cls._provider_account_map.keys()
-        }
+        return {provider: cls.is_configured(provider) for provider in cls._provider_account_map.keys()}

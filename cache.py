@@ -58,5 +58,7 @@ def cache_result(ttl_seconds: int):
             result = fn(*args, **kwargs)
             set_cached(cache_key, result, ttl_seconds)
             return result
+
         return wrapper
+
     return decorator

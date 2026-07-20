@@ -518,6 +518,7 @@ def prewarm_minilm():
     global _local_embedding_model
     try:
         from sentence_transformers import SentenceTransformer
+
         _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
         if not _embedding_mode_printed:
             print("  Local embeddings: all-MiniLM-L6-v2 (pre-warmed)")

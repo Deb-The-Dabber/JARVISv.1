@@ -99,6 +99,7 @@ def mark_sent(message_id: int, error: str = ""):
 def send_notification(title: str, body: str, device_token: str = "") -> bool:
     try:
         import requests as req
+
         response = req.post(
             "https://exp.host/--/api/v2/push/send",
             json={
@@ -130,6 +131,7 @@ def send_pending():
 
 def _flush_old_outbox(max_age_days: int = 7):
     from datetime import timedelta
+
     cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
     with _get_conn() as conn:
         conn.execute("DELETE FROM outbox WHERE created_at < ?", (cutoff,))

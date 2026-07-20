@@ -33,7 +33,7 @@ def _cluster_entries(entries: list) -> list:
         text = e.get("text", "").strip()
         if not text:
             continue
-        sig = hash(re.sub(r'\w+', 'X', text[:80]))
+        sig = hash(re.sub(r"\w+", "X", text[:80]))
         group_key = f"{text[:3]}_{sig}"
         if group_key not in groups:
             groups[group_key] = []
@@ -45,9 +45,9 @@ def _generate_parser(entries: list) -> tuple:
     """Generate a parser function from a cluster of similar entries."""
     sample = entries[0]["text"][:200]
 
-    tool_match = re.search(r'(\w+)\s*[\(\{]', sample)
+    tool_match = re.search(r"(\w+)\s*[\(\{]", sample)
     tool_placeholder = tool_match.group(1) if tool_match else "tool_name"
-    safe_name = re.sub(r'\W+', '_', tool_placeholder.lower())[:30]
+    safe_name = re.sub(r"\W+", "_", tool_placeholder.lower())[:30]
 
     lines = [
         '"""',
@@ -88,7 +88,7 @@ def main():
     for i, cluster in enumerate(clusters):
         code, name = _generate_parser(cluster)
         # Use cluster prefix as unique filename
-        prefix = re.sub(r'\W+', '_', cluster[0].get("text", "")[:10].lower())
+        prefix = re.sub(r"\W+", "_", cluster[0].get("text", "")[:10].lower())
         fname = f"parser_{prefix}_{i}.py"
         fpath = os.path.join(PARSERS_DIR, fname)
         with open(fpath, "w") as f:

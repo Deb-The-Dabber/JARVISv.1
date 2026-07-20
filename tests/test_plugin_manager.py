@@ -23,6 +23,7 @@ def isolated_plugins():
     old_dir = PLUGIN_DIR
     tmp = tempfile.mkdtemp()
     import plugin_manager as pm
+
     pm.PLUGIN_DIR = tmp
     _loaded_plugins.clear()
     yield tmp
@@ -44,13 +45,16 @@ def _create_plugin(base, name, manifest_overrides=None, tools=None):
         manifest.update(manifest_overrides)
     with open(os.path.join(pdir, "manifest.yaml"), "w") as f:
         import yaml
+
         yaml.dump(manifest, f)
     if tools is None:
-        tools = [{
-            "name": f"{name}_tool",
-            "description": f"A tool from {name}",
-            "parameters": {"type": "object", "properties": {}},
-        }]
+        tools = [
+            {
+                "name": f"{name}_tool",
+                "description": f"A tool from {name}",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ]
     # Build plugin.py with actual callable handlers
     lines = ["def register():"]
     lines.append("    def _h():")
@@ -102,11 +106,15 @@ def test_tool_registered(isolated_plugins):
 
 def test_multiple_tools(isolated_plugins):
     initial_count = len(TOOL_DEFINITIONS)
-    _create_plugin(isolated_plugins, "p1", tools=[
-        {"name": "tool_a", "description": "A", "parameters": {}, "handler": lambda: "a"},
-        {"name": "tool_b", "description": "B", "parameters": {}, "handler": lambda: "b"},
-        {"name": "tool_c", "description": "C", "parameters": {}, "handler": lambda: "c"},
-    ])
+    _create_plugin(
+        isolated_plugins,
+        "p1",
+        tools=[
+            {"name": "tool_a", "description": "A", "parameters": {}, "handler": lambda: "a"},
+            {"name": "tool_b", "description": "B", "parameters": {}, "handler": lambda: "b"},
+            {"name": "tool_c", "description": "C", "parameters": {}, "handler": lambda: "c"},
+        ],
+    )
     load_all_plugins()
     assert len(TOOL_DEFINITIONS) == initial_count + 3
 
@@ -132,6 +140,7 @@ def test_missing_entry(isolated_plugins):
     pdir = os.path.join(isolated_plugins, "no_entry")
     os.makedirs(pdir, exist_ok=True)
     import yaml
+
     with open(os.path.join(pdir, "manifest.yaml"), "w") as f:
         yaml.dump({"name": "no_entry", "entry": "missing.py"}, f)
     results = load_all_plugins()
@@ -143,6 +152,7 @@ def test_no_register_function(isolated_plugins):
     pdir = os.path.join(isolated_plugins, "no_reg")
     os.makedirs(pdir, exist_ok=True)
     import yaml
+
     with open(os.path.join(pdir, "manifest.yaml"), "w") as f:
         yaml.dump({"name": "no_reg"}, f)
     with open(os.path.join(pdir, "plugin.py"), "w") as f:

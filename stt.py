@@ -20,6 +20,7 @@ def _load_vad():
         import webrtcvad
 
         from config import VAD_AGGRESSIVENESS
+
         _vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
     except Exception:
         _vad = False
@@ -36,6 +37,7 @@ def vad_filter(audio: bytes, sample_rate: int = 16000) -> bool:
     if v is False:
         return True
     from config import VAD_FRAME_MS
+
     frame_size = int(sample_rate * VAD_FRAME_MS / 1000) * 2
     if len(audio) < frame_size:
         return False
@@ -52,12 +54,14 @@ def _load_model():
             return _model
         try:
             from faster_whisper import WhisperModel
+
             _model = WhisperModel("base", device="cpu", compute_type="int8")
             _model_kind = "faster-whisper"
             print("  STT: faster-whisper (base, int8)")
         except Exception as e:
             print(f"  faster-whisper failed ({e}), falling back to openai-whisper...")
             import whisper
+
             _model = whisper.load_model("base")
             _model_kind = "openai-whisper"
             print("  STT: openai-whisper (fallback)")
@@ -103,6 +107,7 @@ def transcribe_audio_data(audio_bytes: bytes) -> str:
 def transcribe_numpy(audio, sample_rate: int = SAMPLE_RATE) -> str:
     """Transcribe numpy audio array."""
     import scipy.io.wavfile as wav
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         wav.write(f.name, sample_rate, audio)
         tmp = f.name

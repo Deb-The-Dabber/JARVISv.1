@@ -64,11 +64,7 @@ def query_relationships(entity: str) -> str:
     for source, _, data in _graph.in_edges(entity, data=True):
         parts.append(f"{data.get('relationship', 'related_to')} by {source}")
 
-    props = {
-        k: v
-        for k, v in _graph.nodes[entity].items()
-        if k != "entity_type"
-    }
+    props = {k: v for k, v in _graph.nodes[entity].items() if k != "entity_type"}
     prop_text = ", ".join(f"{k}: {v}" for k, v in props.items())
     rel_text = ", ".join(parts) if parts else "no relationships yet"
     return f"{entity}: {rel_text}" + (f". Properties: {prop_text}" if prop_text else "")
@@ -109,10 +105,12 @@ Text: {text[:2000]}"""
 
     try:
         from brain import ask_openrouter
+
         extraction = ask_openrouter(prompt, [])
     except Exception:
         try:
             from brain import ask_groq
+
             extraction = ask_groq(prompt, [])
         except Exception:
             return []
@@ -163,12 +161,14 @@ def search_neighbors(entity: str, max_distance: int = 1) -> list[dict]:
         for _, _, data in _graph.in_edges(entity, data=True):
             edge_info.append(data.get("relationship", "related_to"))
         props = {k: v for k, v in _graph.nodes[neighbor].items() if k != "entity_type"}
-        results.append({
-            "entity": neighbor,
-            "entity_type": _graph.nodes[neighbor].get("entity_type", "concept"),
-            "relationships": list(set(edge_info)),
-            "properties": props,
-        })
+        results.append(
+            {
+                "entity": neighbor,
+                "entity_type": _graph.nodes[neighbor].get("entity_type", "concept"),
+                "relationships": list(set(edge_info)),
+                "properties": props,
+            }
+        )
     return results
 
 
@@ -189,12 +189,14 @@ def hybrid_graph_search(query: str, top_k: int = 5) -> list[dict]:
                 score += 0.5
         if score > 0:
             neighbors = search_neighbors(name)
-            results.append({
-                "entity": name,
-                "entity_type": data.get("entity_type", "concept"),
-                "score": score,
-                "neighbors": [n["entity"] for n in neighbors[:5]],
-            })
+            results.append(
+                {
+                    "entity": name,
+                    "entity_type": data.get("entity_type", "concept"),
+                    "score": score,
+                    "neighbors": [n["entity"] for n in neighbors[:5]],
+                }
+            )
 
     results.sort(key=lambda x: -x["score"])
     return results[:top_k]
@@ -206,9 +208,7 @@ def get_graph_summary() -> str:
         kind = data.get("entity_type", "concept")
         counts[kind] = counts.get(kind, 0) + 1
     type_text = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
-    return f"{_graph.number_of_nodes()} entities, {_graph.number_of_edges()} relationships" + (
-        f" ({type_text})" if type_text else ""
-    )
+    return f"{_graph.number_of_nodes()} entities, {_graph.number_of_edges()} relationships" + (f" ({type_text})" if type_text else "")
 
 
 def seed_initial_knowledge():
@@ -235,6 +235,4 @@ seed_initial_knowledge()
 # so models can't call it autonomously. GRAPH_TOOLS keeps the
 # runtime function accessible for manual terminal "graph extract" commands.
 GRAPH_DEFINITIONS: list = []
-GRAPH_TOOLS = {
-    "extract_entities_relations": extract_entities_relations
-}
+GRAPH_TOOLS = {"extract_entities_relations": extract_entities_relations}

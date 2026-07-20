@@ -38,7 +38,9 @@ def run_pip_audit() -> bool:
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip_audit", "--desc", "--require-hashes"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0:
             check("pip-audit", True, "No vulnerabilities found")
@@ -61,7 +63,9 @@ def run_safety_scan() -> bool:
     try:
         result = subprocess.run(
             [sys.executable, "-m", "safety", "check"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode == 0:
             check("safety check", True, "No known vulnerabilities")
@@ -84,7 +88,9 @@ def check_secrets() -> bool:
     try:
         result = subprocess.run(
             ["git", "secrets", "--scan", "-r"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode == 0:
             check("git-secrets", True, "No secrets found")

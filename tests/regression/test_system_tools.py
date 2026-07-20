@@ -1,4 +1,3 @@
-
 import pytest
 
 from tests.helpers import assert_no_raw_json

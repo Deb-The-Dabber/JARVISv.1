@@ -54,6 +54,7 @@ def _require_forms_auth(func):
             if not tokens:
                 return "Google Forms token expired. Re-authorize."
         return func(tokens.access_token, *args, **kwargs)
+
     return wrapper
 
 
@@ -149,20 +150,22 @@ def forms_add_question(form_id: str, question: str, access_token: str = "") -> s
             "Content-Type": "application/json",
         },
         json={
-            "requests": [{
-                "createItem": {
-                    "item": {
-                        "title": question,
-                        "questionItem": {
-                            "question": {
-                                "required": False,
-                                "textQuestion": {"paragraph": False},
-                            }
+            "requests": [
+                {
+                    "createItem": {
+                        "item": {
+                            "title": question,
+                            "questionItem": {
+                                "question": {
+                                    "required": False,
+                                    "textQuestion": {"paragraph": False},
+                                }
+                            },
                         },
-                    },
-                    "location": {"index": 0},
+                        "location": {"index": 0},
+                    }
                 }
-            }]
+            ]
         },
         timeout=15,
     )
@@ -188,7 +191,7 @@ def forms_get_responses(form_id: str, access_token: str = "") -> str:
     summary = [f"Total responses: {len(responses)}"]
     for i, r in enumerate(responses[:10]):
         answers = r.get("answers", {})
-        summary.append(f"  Response {i+1}: {len(answers)} answers")
+        summary.append(f"  Response {i + 1}: {len(answers)} answers")
     return "\n".join(summary)
 
 
@@ -208,9 +211,7 @@ FORMS_DEFINITIONS = [
         "description": "Get details of a Google Form",
         "parameters": {
             "type": "object",
-            "properties": {
-                "form_id": {"type": "string", "description": "Google Forms form ID"}
-            },
+            "properties": {"form_id": {"type": "string", "description": "Google Forms form ID"}},
             "required": ["form_id"],
         },
     },
@@ -219,9 +220,7 @@ FORMS_DEFINITIONS = [
         "description": "Create a new Google Form",
         "parameters": {
             "type": "object",
-            "properties": {
-                "title": {"type": "string", "description": "Title of the form"}
-            },
+            "properties": {"title": {"type": "string", "description": "Title of the form"}},
             "required": ["title"],
         },
     },
@@ -230,10 +229,7 @@ FORMS_DEFINITIONS = [
         "description": "Add a text question to a Google Form",
         "parameters": {
             "type": "object",
-            "properties": {
-                "form_id": {"type": "string", "description": "Google Forms form ID"},
-                "question": {"type": "string", "description": "The question text"}
-            },
+            "properties": {"form_id": {"type": "string", "description": "Google Forms form ID"}, "question": {"type": "string", "description": "The question text"}},
             "required": ["form_id", "question"],
         },
     },
@@ -242,9 +238,7 @@ FORMS_DEFINITIONS = [
         "description": "Get responses submitted to a Google Form",
         "parameters": {
             "type": "object",
-            "properties": {
-                "form_id": {"type": "string", "description": "Google Forms form ID"}
-            },
+            "properties": {"form_id": {"type": "string", "description": "Google Forms form ID"}},
             "required": ["form_id"],
         },
     },

@@ -67,21 +67,20 @@ def get_top_processes(by: str = "memory", count: int = 10):
     for proc in psutil.process_iter(["pid", "name", "memory_percent", "cpu_percent"]):
         try:
             info = proc.info
-            rows.append({
-                "pid": info.get("pid"),
-                "name": info.get("name") or "Unknown",
-                "memory_percent": float(info.get("memory_percent") or 0),
-                "cpu_percent": float(info.get("cpu_percent") or 0),
-            })
+            rows.append(
+                {
+                    "pid": info.get("pid"),
+                    "name": info.get("name") or "Unknown",
+                    "memory_percent": float(info.get("memory_percent") or 0),
+                    "cpu_percent": float(info.get("cpu_percent") or 0),
+                }
+            )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     rows.sort(key=lambda item: item[sort_key], reverse=True)
     lines = [f"Top processes by {'RAM' if sort_key == 'memory_percent' else 'CPU'}:"]
     for item in rows[: max(1, min(int(count or 10), 25))]:
-        lines.append(
-            f"{item['name']} (pid {item['pid']}): "
-            f"RAM {item['memory_percent']:.1f}%, CPU {item['cpu_percent']:.1f}%"
-        )
+        lines.append(f"{item['name']} (pid {item['pid']}): RAM {item['memory_percent']:.1f}%, CPU {item['cpu_percent']:.1f}%")
     return "\n".join(lines)
 
 
@@ -248,13 +247,14 @@ def warwatch_news(query: str = "latest") -> str:
 
     # Parse article cards from HTML
     import re
+
     articles = []
     # Match article blocks: each has h3 title, p summary, span source, severity
     pattern = r'<article[^>]*>.*?<h3[^>]*>(.*?)</h3>.*?<p[^>]*>(.*?)</p>.*?<div class="font-mono[^"]*"[^>]*>([^<]*)<'
     matches = re.findall(pattern, html, re.DOTALL)
     for title, summary, source in matches[:15]:
-        title = re.sub(r'<[^>]+>', '', title).strip()
-        summary = re.sub(r'<[^>]+>', '', summary).strip()
+        title = re.sub(r"<[^>]+>", "", title).strip()
+        summary = re.sub(r"<[^>]+>", "", summary).strip()
         source = source.strip()
         articles.append({"title": title, "summary": summary[:200], "source": source})
 

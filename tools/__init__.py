@@ -13,6 +13,15 @@ from tools.computer_tools import COMPUTER_DEFINITIONS, COMPUTER_TOOLS
 from tools.discord_tools import DISCORD_DEFINITIONS, DISCORD_TOOLS
 from tools.file_tools import FILE_DEFINITIONS, FILE_TOOLS
 from tools.finance_tools import FINANCE_DEFINITIONS, FINANCE_TOOLS
+
+# OAuth-dependent tools (less commonly used for tool-calling, placed last due to Groq 128 limit)
+from tools.github_tools import GITHUB_DEFINITIONS, GITHUB_TOOLS
+from tools.gmail_tools import GMAIL_DEFINITIONS, GMAIL_TOOLS
+from tools.google_docs_tools import DOCS_DEFINITIONS, DOCS_TOOLS
+from tools.google_drive_tools import DRIVE_DEFINITIONS, DRIVE_TOOLS
+from tools.google_forms_tools import FORMS_DEFINITIONS, FORMS_TOOLS
+from tools.google_sheets_tools import SHEETS_DEFINITIONS, SHEETS_TOOLS
+from tools.google_slides_tools import SLIDES_DEFINITIONS, SLIDES_TOOLS
 from tools.inspect_tools import INSPECT_DEFINITIONS, INSPECT_TOOLS
 from tools.maps_tools import MAPS_DEFINITIONS, MAPS_TOOLS
 from tools.news_tools import NEWS_DEFINITIONS, NEWS_TOOLS
@@ -22,14 +31,6 @@ from tools.serpapi_tools import SERPAPI_DEFINITIONS, SERPAPI_TOOLS
 from tools.spotify_tools import SPOTIFY_DEFINITIONS, SPOTIFY_TOOLS
 from tools.system_tools import SYSTEM_DEFINITIONS, SYSTEM_TOOLS
 from tools.vision_tools import VISION_DEFINITIONS, VISION_TOOLS
-# OAuth-dependent tools (less commonly used for tool-calling, placed last due to Groq 128 limit)
-from tools.github_tools import GITHUB_DEFINITIONS, GITHUB_TOOLS
-from tools.gmail_tools import GMAIL_DEFINITIONS, GMAIL_TOOLS
-from tools.google_docs_tools import DOCS_DEFINITIONS, DOCS_TOOLS
-from tools.google_drive_tools import DRIVE_DEFINITIONS, DRIVE_TOOLS
-from tools.google_forms_tools import FORMS_DEFINITIONS, FORMS_TOOLS
-from tools.google_sheets_tools import SHEETS_DEFINITIONS, SHEETS_TOOLS
-from tools.google_slides_tools import SLIDES_DEFINITIONS, SLIDES_TOOLS
 
 # Merge everything into one registry
 TOOL_REGISTRY = {}

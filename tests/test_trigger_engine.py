@@ -28,6 +28,7 @@ DB = tempfile.mktemp(suffix=".db")
 
 def _patch_db():
     import trigger_engine as te
+
     te.DB_PATH = DB
 
 
@@ -209,30 +210,26 @@ class TestCRUD:
 
 class TestFire:
     def test_fire_tool(self):
-        t = create_trigger("fire_tool", "once", "2099-01-01T00:00:00",
-                           "tool", "get_system_info")
+        t = create_trigger("fire_tool", "once", "2099-01-01T00:00:00", "tool", "get_system_info")
         result = fire_trigger(t["id"])
         assert result["ok"] is True
         assert result["status"] == "done"
         assert result["duration_ms"] >= 0
 
     def test_fire_unknown_tool(self):
-        t = create_trigger("fire_bad", "once", "2099-01-01T00:00:00",
-                           "tool", "nonexistent_tool_xyz")
+        t = create_trigger("fire_bad", "once", "2099-01-01T00:00:00", "tool", "nonexistent_tool_xyz")
         result = fire_trigger(t["id"])
         assert result["ok"] is False
         assert result["status"] == "error"
 
     def test_fire_disabled(self):
-        t = create_trigger("fire_dis", "once", "2099-01-01T00:00:00",
-                           "tool", "get_system_info")
+        t = create_trigger("fire_dis", "once", "2099-01-01T00:00:00", "tool", "get_system_info")
         update_trigger(t["id"], enabled=0)
         with pytest.raises(ValueError, match="disabled"):
             fire_trigger(t["id"])
 
     def test_fire_adds_history(self):
-        t = create_trigger("fire_hist", "once", "2099-01-01T00:00:00",
-                           "tool", "get_system_info")
+        t = create_trigger("fire_hist", "once", "2099-01-01T00:00:00", "tool", "get_system_info")
         fire_trigger(t["id"])
         history = get_trigger_history(t["id"])
         assert len(history) >= 1
@@ -245,8 +242,7 @@ class TestHistory:
         assert get_trigger_history(999) == []
 
     def test_history_all(self):
-        t = create_trigger("hist_all", "once", "2099-01-01T00:00:00",
-                           "tool", "get_system_info")
+        t = create_trigger("hist_all", "once", "2099-01-01T00:00:00", "tool", "get_system_info")
         fire_trigger(t["id"])
         all_h = get_trigger_history(limit=100)
         assert len(all_h) >= 1
@@ -267,15 +263,13 @@ class TestEnableDisable:
 
 class TestEventTriggers:
     def test_fire_event(self):
-        create_trigger("evt_test", "event", "my_event", "tool",
-                       "get_system_info", {}, "event test")
+        create_trigger("evt_test", "event", "my_event", "tool", "get_system_info", {}, "event test")
         results = fire_event("my_event")
         assert len(results) == 1
         assert results[0]["ok"] is True
 
     def test_fire_event_no_match(self):
-        create_trigger("evt_nomatch", "event", "some_event", "tool",
-                       "get_system_info", {}, "event test")
+        create_trigger("evt_nomatch", "event", "some_event", "tool", "get_system_info", {}, "event test")
         results = fire_event("other_event")
         assert len(results) == 0
 
@@ -283,6 +277,7 @@ class TestEventTriggers:
 class TestScheduler:
     def test_scheduler_creates_no_errors(self):
         from trigger_engine import start, stop
+
         start()
         assert True
         stop()
@@ -298,8 +293,7 @@ class TestNextFireUpdates:
         assert after is not None
 
     def test_fire_updates_fire_count(self):
-        t = create_trigger("nf_count", "once", "2099-01-01T00:00:00",
-                           "tool", "get_weather")
+        t = create_trigger("nf_count", "once", "2099-01-01T00:00:00", "tool", "get_weather")
         assert t["fire_count"] == 0
         fire_trigger(t["id"])
         assert get_trigger(t["id"])["fire_count"] == 1

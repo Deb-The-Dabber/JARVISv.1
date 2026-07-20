@@ -273,18 +273,21 @@ def _read_file(path: str) -> str:
     if ext == ".pdf":
         try:
             from pypdf import PdfReader
+
             reader = PdfReader(path)
             return "\n".join(page.extract_text() or "" for page in reader.pages)
         except Exception:
             pass
         try:
             from tools.vision_tools import ocr_document
+
             return ocr_document(path)
         except Exception:
             return ""
     if ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff"):
         try:
             from tools.vision_tools import ocr_document
+
             return ocr_document(path)
         except Exception:
             return ""
@@ -383,10 +386,7 @@ def search_rag(query: str, n_results: int = 5) -> str:
     try:
         collection = _get_collection(DEFAULT_COLLECTION)
         if collection.count() == 0:
-            return (
-                f"No documents indexed. RAG_FOLDER is '{DEFAULT_FOLDER}'."
-                " Add files there or run '/ingest <path>' to index."
-            )
+            return f"No documents indexed. RAG_FOLDER is '{DEFAULT_FOLDER}'. Add files there or run '/ingest <path>' to index."
 
         vector_results = _vector_search(query, n=n_results * 4)
         bm25_results = _bm25_search(query, n=n_results * 4)

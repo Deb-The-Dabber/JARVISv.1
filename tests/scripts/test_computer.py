@@ -21,7 +21,7 @@ def test_take_screenshot():
     # Extract the path from the result string
     path_prefix = "Screenshot saved to "
     assert result.startswith(path_prefix), f"Unexpected result format: {result}"
-    path = result[len(path_prefix):]
+    path = result[len(path_prefix) :]
     assert os.path.isfile(path), f"Screenshot file not found: {path}"
     os.remove(path)
     print("[PASS] test_take_screenshot")

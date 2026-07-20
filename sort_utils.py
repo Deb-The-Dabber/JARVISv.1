@@ -1,10 +1,10 @@
 def sort_list(items, reverse=False):
     """Sort a list in ascending order by default.
-    
+
     Args:
         items: List to sort.
         reverse: If True, sort in descending order.
-    
+
     Returns:
         A new sorted list.
     """
@@ -14,5 +14,5 @@ def sort_list(items, reverse=False):
 # Example usage
 if __name__ == "__main__":
     nums = [4, 2, 9, 1, 5]
-    print(sort_list(nums))           # [1, 2, 4, 5, 9]
-    print(sort_list(nums, True))     # [9, 5, 4, 2, 1]
+    print(sort_list(nums))  # [1, 2, 4, 5, 9]
+    print(sort_list(nums, True))  # [9, 5, 4, 2, 1]

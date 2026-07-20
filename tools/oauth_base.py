@@ -67,9 +67,7 @@ class OAuth2Provider(ABC):
 
     def generate_pkce(self) -> tuple[str, str]:
         code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("utf-8").rstrip("=")
-        code_challenge = base64.urlsafe_b64encode(
-            hashlib.sha256(code_verifier.encode("utf-8")).digest()
-        ).decode("utf-8").rstrip("=")
+        code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("utf-8")).digest()).decode("utf-8").rstrip("=")
         return code_verifier, code_challenge
 
     def generate_state(self) -> str:
@@ -228,16 +226,12 @@ class GitHubOAuthProvider(OAuth2Provider):
         print(f"[GitHub exchange_code] Raw response ({len(response.text)} chars): {response.text[:500]}")
 
         if response.status_code != 200:
-            raise ValueError(
-                f"GitHub token exchange failed ({response.status_code}): {response.text[:500]}"
-            )
+            raise ValueError(f"GitHub token exchange failed ({response.status_code}): {response.text[:500]}")
 
         try:
             token_data = response.json()
         except ValueError:
-            raise ValueError(
-                f"GitHub returned non-JSON response ({len(response.text)} chars): {response.text[:500]}"
-            )
+            raise ValueError(f"GitHub returned non-JSON response ({len(response.text)} chars): {response.text[:500]}")
 
         if "error" in token_data:
             raise ValueError(f"GitHub OAuth error: {token_data.get('error_description', token_data['error'])}")

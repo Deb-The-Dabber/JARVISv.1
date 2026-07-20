@@ -18,8 +18,10 @@ class TestTTSFallback:
 
     def test_concurrent_tts_survives(self, api):
         """Multiple rapid requests should not crash."""
+
         def ask(q):
             return api.ask(q)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
             futures = [ex.submit(ask, f"test message {i}") for i in range(3)]
             for f in futures:

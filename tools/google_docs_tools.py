@@ -54,6 +54,7 @@ def _require_docs_auth(func):
             if not tokens:
                 return "Google Docs token expired. Re-authorize."
         return func(tokens.access_token, *args, **kwargs)
+
     return wrapper
 
 
@@ -149,12 +150,14 @@ def docs_append_text(document_id: str, text: str, access_token: str = "") -> str
             "Content-Type": "application/json",
         },
         json={
-            "requests": [{
-                "insertText": {
-                    "location": {"index": 1},
-                    "text": text,
+            "requests": [
+                {
+                    "insertText": {
+                        "location": {"index": 1},
+                        "text": text,
+                    }
                 }
-            }]
+            ]
         },
         timeout=15,
     )
@@ -183,9 +186,7 @@ DOCS_DEFINITIONS = [
         "description": "Get content of a Google Doc by document ID",
         "parameters": {
             "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Google Doc document ID"}
-            },
+            "properties": {"document_id": {"type": "string", "description": "Google Doc document ID"}},
             "required": ["document_id"],
         },
     },
@@ -194,9 +195,7 @@ DOCS_DEFINITIONS = [
         "description": "Create a new Google Doc with a title",
         "parameters": {
             "type": "object",
-            "properties": {
-                "title": {"type": "string", "description": "Title of the document"}
-            },
+            "properties": {"title": {"type": "string", "description": "Title of the document"}},
             "required": ["title"],
         },
     },
@@ -205,10 +204,7 @@ DOCS_DEFINITIONS = [
         "description": "Append text to a Google Doc",
         "parameters": {
             "type": "object",
-            "properties": {
-                "document_id": {"type": "string", "description": "Google Doc document ID"},
-                "text": {"type": "string", "description": "Text to append"}
-            },
+            "properties": {"document_id": {"type": "string", "description": "Google Doc document ID"}, "text": {"type": "string", "description": "Text to append"}},
             "required": ["document_id", "text"],
         },
     },
@@ -217,9 +213,7 @@ DOCS_DEFINITIONS = [
         "description": "Search for Google Docs by name (delegates to Drive search)",
         "parameters": {
             "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search query"}
-            },
+            "properties": {"query": {"type": "string", "description": "Search query"}},
             "required": ["query"],
         },
     },

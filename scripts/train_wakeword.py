@@ -24,6 +24,7 @@ def test_wake_word():
     print("  Testing wake word detection...")
     try:
         import pvporcupine
+
         print(f"  {OK} Porcupine available (v{pvporcupine.__version__})")
     except ImportError:
         print(f"  {WARN} Porcupine not installed — using openWakeWord fallback")
@@ -32,6 +33,7 @@ def test_wake_word():
 
     try:
         import importlib
+
         if importlib.util.find_spec("openwakeword"):
             print(f"  {OK} openWakeWord available")
         else:
@@ -41,6 +43,7 @@ def test_wake_word():
 
     try:
         import importlib
+
         if importlib.util.find_spec("webrtcvad"):
             print(f"  {OK} webrtcvad available — VAD ready")
         else:
@@ -49,7 +52,8 @@ def test_wake_word():
         print(f"  {WARN} webrtcvad check skipped")
 
     from config import SAMPLE_RATE, WAKE_WORD
-    print(f"  Wake word: \"{WAKE_WORD}\"")
+
+    print(f'  Wake word: "{WAKE_WORD}"')
     print(f"  Sample rate: {SAMPLE_RATE}Hz")
 
 
@@ -79,6 +83,7 @@ def calibrate_vad():
     print("  Calibrating VAD...")
     try:
         import importlib
+
         if not importlib.util.find_spec("webrtcvad"):
             print(f"  {FAIL} webrtcvad not installed — pip install webrtcvad")
             return

@@ -13,7 +13,9 @@ def _free_port(port: int = 8000):
     try:
         result = subprocess.run(
             ["lsof", "-ti", f":{port}"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         pids = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
         for pid in pids:
@@ -89,11 +91,7 @@ def api(jarvis_server):
 
 @pytest.fixture
 def has_display():
-    return bool(
-        os.environ.get("DISPLAY")
-        or os.environ.get("WAYLAND_DISPLAY")
-        or (sys.platform == "darwin" and os.environ.get("TERM_PROGRAM"))
-    )
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or (sys.platform == "darwin" and os.environ.get("TERM_PROGRAM")))
 
 
 @pytest.fixture(autouse=True)
@@ -109,6 +107,7 @@ def _silence_tts():
 
 # ── Mock Provider Fixtures ──
 
+
 @pytest.fixture(scope="session")
 def mock_provider_server():
     """Start the mock provider server for the test session."""
@@ -120,15 +119,20 @@ def mock_provider_server():
 
     # Set dummy API keys so brain.py passes the api_key check
     for key in [
-        "NVIDIA_NEMOTRON_API_KEY", "NVIDIA_API_KEY", "NVIDIA_EMBEDDING_API_KEY",
-        "DEEPSEEK_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
-        "KIMI_API_KEY", "TAVILY_API_KEY", "ELEVENLABS_API_KEY",
+        "NVIDIA_NEMOTRON_API_KEY",
+        "NVIDIA_API_KEY",
+        "NVIDIA_EMBEDDING_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "KIMI_API_KEY",
+        "TAVILY_API_KEY",
+        "ELEVENLABS_API_KEY",
     ]:
         env.setdefault(key, "mock-key")
 
     proc = subprocess.Popen(
-        ["python", "-m", "uvicorn", "tests.mock_provider:app",
-         "--host", "127.0.0.1", "--port", str(mock_port), "--log-level", "warning"],
+        ["python", "-m", "uvicorn", "tests.mock_provider:app", "--host", "127.0.0.1", "--port", str(mock_port), "--log-level", "warning"],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -196,9 +200,15 @@ def mock_api(mock_provider_server):
     env["JARVIS_MOCK_PROVIDERS"] = "1"
     env["MOCK_PROVIDER_URL"] = f"http://127.0.0.1:{mock_port}"
     for key in [
-        "NVIDIA_NEMOTRON_API_KEY", "NVIDIA_API_KEY", "NVIDIA_EMBEDDING_API_KEY",
-        "DEEPSEEK_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
-        "KIMI_API_KEY", "TAVILY_API_KEY", "ELEVENLABS_API_KEY",
+        "NVIDIA_NEMOTRON_API_KEY",
+        "NVIDIA_API_KEY",
+        "NVIDIA_EMBEDDING_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "KIMI_API_KEY",
+        "TAVILY_API_KEY",
+        "ELEVENLABS_API_KEY",
     ]:
         env.setdefault(key, "mock-key")
 

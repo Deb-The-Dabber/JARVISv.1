@@ -1,4 +1,3 @@
-
 import requests
 
 from config import SERPAPI_API_KEY

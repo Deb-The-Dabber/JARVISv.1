@@ -19,6 +19,7 @@ GEMINI_MODEL = "gemini-2.5-flash"
 _speak_fn = None
 _on_tool_learned = None
 
+
 def init(speak_fn, on_tool_learned):
     global _speak_fn, _on_tool_learned
     _speak_fn = speak_fn
@@ -50,13 +51,15 @@ def get_learned_tools() -> list[dict]:
                     task = line.replace("# Task:", "").strip()
                     break
             func_name = filename.split("_")[0]
-            tools.append({
-                "name": func_name,
-                "filename": filename,
-                "path": filepath,
-                "task": task,
-                "created": mtime,
-            })
+            tools.append(
+                {
+                    "name": func_name,
+                    "filename": filename,
+                    "path": filepath,
+                    "task": task,
+                    "created": mtime,
+                }
+            )
         except Exception:
             pass
     return tools
@@ -74,9 +77,7 @@ def get_learning_stats() -> dict:
             cur = conn.cursor()
             row = cur.execute("SELECT COUNT(*) as cnt FROM audit").fetchone()
             total_actions = row["cnt"] if row else 0
-            rows = cur.execute(
-                "SELECT tool_name, COUNT(*) as cnt FROM audit GROUP BY tool_name ORDER BY cnt DESC LIMIT 10"
-            ).fetchall()
+            rows = cur.execute("SELECT tool_name, COUNT(*) as cnt FROM audit GROUP BY tool_name ORDER BY cnt DESC LIMIT 10").fetchall()
             top_tools = [{"tool": r["tool_name"], "count": r["cnt"]} for r in rows]
             conn.close()
         except Exception:
@@ -103,9 +104,11 @@ def delete_learned_tool(name: str) -> dict:
                 return {"status": "error", "error": str(e)}
     return {"status": "not_found", "name": name}
 
+
 def _speak(text):
     if _speak_fn:
         _speak_fn(text)
+
 
 def _env(name: str) -> str:
     return (os.getenv(name) or "").strip()
@@ -113,6 +116,7 @@ def _env(name: str) -> str:
 
 def _ask_openai_compatible(prompt: str, api_key: str, base_url: str, model: str) -> str:
     from openai import OpenAI
+
     client = OpenAI(api_key=api_key, base_url=base_url)
     response = client.chat.completions.create(
         model=model,
@@ -153,6 +157,7 @@ def _ask_llm(prompt):
     if gemini_key:
         try:
             from google import genai
+
             client = genai.Client(api_key=gemini_key)
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
@@ -164,14 +169,15 @@ def _ask_llm(prompt):
 
     return "Error: all learner LLM providers failed. " + "; ".join(errors)
 
+
 def learn_capability(task_description: str):
     """
     Background task: research and write a new Python tool for Jarvis.
     Speaks updates as it works.
     """
+
     def _learn():
-        _speak("I don't know how to do that yet. Let me figure it out. "
-               "In the meantime, is there anything else you'd like me to work on?")
+        _speak("I don't know how to do that yet. Let me figure it out. In the meantime, is there anything else you'd like me to work on?")
 
         # Step 1: Research
         _speak("Researching how to do this...")
@@ -219,7 +225,7 @@ The function must return a string result."""
         filename = f"{func_name}_{timestamp}.py"
         filepath = os.path.join(LEARNED_TOOLS_DIR, filename)
 
-        full_code = f'''# Learned by Jarvis on {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
+        full_code = f"""# Learned by Jarvis on {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}
 # Task: {task_description}
 
 import subprocess
@@ -230,7 +236,7 @@ import psutil
 HOME = os.path.expanduser("~")
 
 {code}
-'''
+"""
         with open(filepath, "w") as f:
             f.write(full_code)
 
@@ -245,15 +251,14 @@ HOME = os.path.expanduser("~")
             if _on_tool_learned:
                 _on_tool_learned(func_name, fn, task_description)
 
-            _speak(f"I figured it out. I've learned how to {task_description}. "
-                   f"You can ask me to do it now.")
+            _speak(f"I figured it out. I've learned how to {task_description}. You can ask me to do it now.")
 
         except Exception as e:
-            _speak(f"I wrote the code but ran into an issue loading it: {str(e)[:100]}. "
-                   f"I've saved it to {filepath} if you want to review it.")
+            _speak(f"I wrote the code but ran into an issue loading it: {str(e)[:100]}. I've saved it to {filepath} if you want to review it.")
 
     t = threading.Thread(target=_learn, daemon=True)
     t.start()
+
 
 def load_learned_tools():
     """Load all previously learned tools on startup."""

@@ -40,9 +40,7 @@ class TokenBucket:
             self.acquire(tokens)
 
 
-_limiters: dict[str, TokenBucket] = {
-    name: TokenBucket(config) for name, config in RATE_LIMITS.items()
-}
+_limiters: dict[str, TokenBucket] = {name: TokenBucket(config) for name, config in RATE_LIMITS.items()}
 
 
 def acquire(service: str, tokens: int = 1):

@@ -104,10 +104,7 @@ def read_screen(app_name: str = ""):
 
 def find_on_screen(what: str, app_name: str = ""):
     focus_msg = _maybe_focus_app(app_name)
-    description = describe_screen(
-        f"Find '{what}' on this screen. If it is a sidebar list item, say roughly how many items "
-        f"from the top and whether a click is needed. Do not invent shell commands."
-    )
+    description = describe_screen(f"Find '{what}' on this screen. If it is a sidebar list item, say roughly how many items from the top and whether a click is needed. Do not invent shell commands.")
     prefix = f"{focus_msg} " if focus_msg else ""
     return f"{prefix}{description}"
 
@@ -122,10 +119,7 @@ def summarize_screen(app_name: str = ""):
 
 def check_screen_for_alerts(app_name: str = ""):
     _maybe_focus_app(app_name)
-    return describe_screen(
-        "Is there anything urgent on screen? Look for errors, alerts, notifications. "
-        "If nothing urgent say 'Nothing urgent.' Be brief."
-    )
+    return describe_screen("Is there anything urgent on screen? Look for errors, alerts, notifications. If nothing urgent say 'Nothing urgent.' Be brief.")
 
 
 def _encode_image(path: str) -> str:
@@ -142,13 +136,15 @@ def _nvidia_vision_query(image_b64: str, question: str) -> str:
     payload = {
         "model": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
         "max_tokens": 512,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
-                {"type": "text", "text": question},
-            ],
-        }],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+                    {"type": "text", "text": question},
+                ],
+            }
+        ],
     }
     resp = requests.post(url, json=payload, headers=headers, timeout=30)
     if resp.status_code != 200:
@@ -165,6 +161,7 @@ def analyze_image(path: str = "", url: str = "", question: str = "Describe this 
         b64 = _encode_image(path)
     elif url:
         import requests as req
+
         resp = req.get(url, timeout=30)
         if resp.status_code != 200:
             return f"Could not download image from {url}"
@@ -179,6 +176,7 @@ def ocr_document(path: str) -> str:
     if ext == ".pdf":
         try:
             import PyPDF2
+
             text = []
             with open(path, "rb") as f:
                 reader = PyPDF2.PdfReader(f)
@@ -192,6 +190,7 @@ def ocr_document(path: str) -> str:
             pass
         try:
             import pdfplumber
+
             text = []
             with pdfplumber.open(path) as pdf:
                 for page in pdf.pages:
@@ -208,6 +207,7 @@ def ocr_document(path: str) -> str:
         return _nvidia_vision_query(b64, "Extract all visible text from this image. Return only the text.")
 
     from config import SUPPORTED_EXTENSIONS
+
     if ext in SUPPORTED_EXTENSIONS:
         try:
             with open(path) as f:
@@ -220,6 +220,7 @@ def ocr_document(path: str) -> str:
 
 def analyze_video(path: str, timestamps: str = "0") -> str:
     import shutil
+
     if not shutil.which("ffmpeg"):
         return "ffmpeg not available — install with: brew install ffmpeg"
     if not os.path.exists(path):
@@ -231,7 +232,8 @@ def analyze_video(path: str, timestamps: str = "0") -> str:
             out = tempfile.mktemp(suffix=".png")
             subprocess.run(
                 ["ffmpeg", "-y", "-ss", ts, "-i", path, "-vframes", "1", "-q:v", "2", out],
-                capture_output=True, timeout=30,
+                capture_output=True,
+                timeout=30,
             )
             if os.path.exists(out):
                 b64 = _encode_image(out)
@@ -334,8 +336,7 @@ VISION_DEFINITIONS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path to the video file"},
-                    "timestamps": {"type": "string",
-                        "description": "Comma-separated timestamps in seconds (e.g. 0,30,60)"},
+                    "timestamps": {"type": "string", "description": "Comma-separated timestamps in seconds (e.g. 0,30,60)"},
                 },
                 "required": ["path"],
             },

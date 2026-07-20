@@ -39,11 +39,7 @@ def get_largest_files(folder: str = "~/Downloads", count: int = 5):
     folder = os.path.expanduser(folder)
     if not os.path.exists(folder):
         return f"{folder} doesn't exist."
-    files = [
-        (os.path.join(folder, f), os.path.getsize(os.path.join(folder, f)))
-        for f in os.listdir(folder)
-        if os.path.isfile(os.path.join(folder, f))
-    ]
+    files = [(os.path.join(folder, f), os.path.getsize(os.path.join(folder, f))) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
     if not files:
         return "No files found."
     files.sort(key=lambda x: x[1], reverse=True)
@@ -98,6 +94,7 @@ def _validate_file_syntax(filename: str, content: str) -> str:
     if ext == ".py":
         try:
             import ast
+
             ast.parse(content)
             return ""
         except SyntaxError as e:
@@ -105,13 +102,16 @@ def _validate_file_syntax(filename: str, content: str) -> str:
     elif ext in (".c", ".h"):
         import subprocess
         import tempfile
+
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=ext, delete=False) as f:
                 f.write(content)
                 tmp_path = f.name
             result = subprocess.run(
                 ["gcc", "-fsyntax-only", "-x", "c", tmp_path],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             os.unlink(tmp_path)
             if result.returncode != 0:

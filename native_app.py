@@ -432,9 +432,7 @@ class JarvisMainWindow(QMainWindow):
         msg.setText("Do you want to proceed?")
         msg.setInformativeText(f"Context: {problem}" if problem else "")
         msg.setIcon(QMessageBox.Icon.Question)
-        msg.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg.setDefaultButton(QMessageBox.StandardButton.Yes)
 
         result = msg.exec()
@@ -481,10 +479,7 @@ class JarvisMainWindow(QMainWindow):
             choice = self._strategy_var
             selected = None
             if choice == "3":
-                picks, ok = QInputDialog.getText(
-                    self, "Pick Problems",
-                    "Problem numbers (e.g. 1,3,5):"
-                )
+                picks, ok = QInputDialog.getText(self, "Pick Problems", "Problem numbers (e.g. 1,3,5):")
                 if ok and picks:
                     try:
                         selected = [int(x.strip()) for x in picks.split(",") if x.strip().isdigit()]
@@ -505,20 +500,16 @@ class JarvisMainWindow(QMainWindow):
 
         for idx in indices:
             problem = problems[idx]
-            preview = f"[{idx+1}/{len(problems)}] {problem[:100]}..."
+            preview = f"[{idx + 1}/{len(problems)}] {problem[:100]}..."
             self._append_conversation("System", preview)
 
             if strategy in ("1", "sequential", "3", "pick") and strategy != "2":
                 msg = QMessageBox(self)
-                msg.setWindowTitle(f"Problem {idx+1}")
-                msg.setText(f"Solve problem {idx+1}?")
+                msg.setWindowTitle(f"Problem {idx + 1}")
+                msg.setText(f"Solve problem {idx + 1}?")
                 msg.setInformativeText(problem[:200])
                 msg.setIcon(QMessageBox.Icon.Question)
-                msg.setStandardButtons(
-                    QMessageBox.StandardButton.Yes |
-                    QMessageBox.StandardButton.No |
-                    QMessageBox.StandardButton.Ignore
-                )
+                msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Ignore)
                 msg.button(QMessageBox.StandardButton.Ignore).setText("All")
                 result = msg.exec()
                 if result == QMessageBox.StandardButton.No:
@@ -550,17 +541,11 @@ class JarvisMainWindow(QMainWindow):
         self._status.showMessage("Conversation cleared", 2000)
 
     def _on_about(self):
-        QMessageBox.about(
-            self, "About Jarvis",
-            "J.A.R.V.I.S. — AI Personal Assistant\n"
-            "macOS Native App\n\n"
-            "Mode: Text / Paste / Queue\n"
-            "Multi-problem detection\n"
-            "Interrupt confirmation"
-        )
+        QMessageBox.about(self, "About Jarvis", "J.A.R.V.I.S. — AI Personal Assistant\nmacOS Native App\n\nMode: Text / Paste / Queue\nMulti-problem detection\nInterrupt confirmation")
 
     def closeEvent(self, event):
         from tts import speak, wait_for_speech
+
         speak("Goodbye.")
         wait_for_speech()
         event.accept()

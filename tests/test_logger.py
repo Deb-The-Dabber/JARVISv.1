@@ -148,8 +148,15 @@ def test_zero_cost_for_unknown_provider():
 
 def test_metrics_has_all_fields():
     m = get_metrics_snapshot()
-    for field in ["requests_total", "requests_by_provider", "requests_by_intent",
-                  "tokens_input_total", "tokens_output_total",
-                  "latency_avg_by_provider", "latency_avg_overall",
-                  "tool_calls_total", "tool_errors_total"]:
+    for field in [
+        "requests_total",
+        "requests_by_provider",
+        "requests_by_intent",
+        "tokens_input_total",
+        "tokens_output_total",
+        "latency_avg_by_provider",
+        "latency_avg_overall",
+        "tool_calls_total",
+        "tool_errors_total",
+    ]:
         assert field in m, f"Missing field: {field}"

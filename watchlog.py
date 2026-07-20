@@ -4,8 +4,10 @@ import sqlite3
 
 DB_PATH = os.path.join(os.path.expanduser("~"), "jarvis_watchlog.db")
 
+
 def _connect():
     return sqlite3.connect(DB_PATH)
+
 
 def init_db():
     with _connect() as conn:
@@ -28,43 +30,36 @@ def init_db():
         """)
         conn.commit()
 
+
 def log_event(category: str, event: str, detail: str = None):
     """Log any event Jarvis notices."""
     with _connect() as conn:
-        conn.execute(
-            "INSERT INTO events (category, event, detail, created_at) VALUES (?, ?, ?, ?)",
-            (category, event, detail, datetime.datetime.now().isoformat())
-        )
+        conn.execute("INSERT INTO events (category, event, detail, created_at) VALUES (?, ?, ?, ?)", (category, event, detail, datetime.datetime.now().isoformat()))
         conn.commit()
+
 
 def log_screen(description: str, frontmost_app: str = None):
     """Log a screen snapshot description."""
     with _connect() as conn:
-        conn.execute(
-            "INSERT INTO screen_snapshots (description, frontmost_app, created_at) VALUES (?, ?, ?)",
-            (description, frontmost_app, datetime.datetime.now().isoformat())
-        )
+        conn.execute("INSERT INTO screen_snapshots (description, frontmost_app, created_at) VALUES (?, ?, ?)", (description, frontmost_app, datetime.datetime.now().isoformat()))
         conn.commit()
+
 
 def get_events_since(hours: int = 8):
     """Get all events from the last N hours."""
     since = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT category, event, detail, created_at FROM events WHERE created_at > ? ORDER BY created_at ASC",
-            (since,)
-        ).fetchall()
+        rows = conn.execute("SELECT category, event, detail, created_at FROM events WHERE created_at > ? ORDER BY created_at ASC", (since,)).fetchall()
     return rows
+
 
 def get_screen_snapshots_since(hours: int = 8):
     """Get screen snapshots from last N hours."""
     since = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT description, frontmost_app, created_at FROM screen_snapshots WHERE created_at > ? ORDER BY created_at ASC",
-            (since,)
-        ).fetchall()
+        rows = conn.execute("SELECT description, frontmost_app, created_at FROM screen_snapshots WHERE created_at > ? ORDER BY created_at ASC", (since,)).fetchall()
     return rows
+
 
 def build_recap(hours: int = 8) -> str:
     """Build a recap string of everything that happened."""
@@ -95,9 +90,10 @@ def build_recap(hours: int = 8) -> str:
             if len(snapshots) > 1:
                 lines.append(f"  [{last[2][11:16]}] {last[1] or 'Unknown'}: {last[0][:100]}")
             if len(snapshots) > 2:
-                lines.append(f"  ...and {len(snapshots)-2} more snapshots")
+                lines.append(f"  ...and {len(snapshots) - 2} more snapshots")
 
     return "\n".join(lines)
+
 
 def clear_old_logs(days: int = 7):
     """Clean up logs older than N days."""
@@ -106,6 +102,7 @@ def clear_old_logs(days: int = 7):
         conn.execute("DELETE FROM events WHERE created_at < ?", (cutoff,))
         conn.execute("DELETE FROM screen_snapshots WHERE created_at < ?", (cutoff,))
         conn.commit()
+
 
 # Initialize on import
 init_db()

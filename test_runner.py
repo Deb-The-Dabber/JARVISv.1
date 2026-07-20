@@ -1,4 +1,5 @@
 """Run JARVIS tests by piping commands and checking output for expected patterns."""
+
 import os
 import re
 import subprocess
@@ -13,9 +14,9 @@ all_output = ""
 def run_test(name, commands, expected_patterns, unexpected_patterns=None, timeout=120):
     global tests_run, tests_passed, all_output
     tests_run += 1
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"TEST: {name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     env = os.environ.copy()
     env["JARVIS_USE_SCHEDULER"] = "1"
@@ -87,10 +88,11 @@ if __name__ == "__main__":
         "Nemotron naked dict — open github",
         ["open https://github.com"],
         expected_patterns=[
-            r"opened", r"github",
+            r"opened",
+            r"github",
         ],
         unexpected_patterns=[
-            r'{"url"',   # should NOT return raw JSON
+            r'{"url"',  # should NOT return raw JSON
         ],
     )
 
@@ -98,7 +100,8 @@ if __name__ == "__main__":
         "Nemotron naked dict — open vscode",
         ["open vscode"],
         expected_patterns=[
-            r"opened", r"visual studio code",
+            r"opened",
+            r"visual studio code",
         ],
         unexpected_patterns=[
             r'{"app_name"',
@@ -130,10 +133,12 @@ if __name__ == "__main__":
         "Web search with query",
         ["search web for python 3.13 release date"],
         expected_patterns=[
-            r"python", r"3\.13",
+            r"python",
+            r"3\.13",
         ],
         unexpected_patterns=[
-            r"missing.*query", r"empty",
+            r"missing.*query",
+            r"empty",
         ],
     )
 
@@ -155,7 +160,8 @@ if __name__ == "__main__":
         "Weather query",
         ["whats the weather today"],
         expected_patterns=[
-            r"temperature", r"°[fF]",
+            r"temperature",
+            r"°[fF]",
         ],
     )
 
@@ -164,14 +170,16 @@ if __name__ == "__main__":
         "System usage",
         ["what's my system usage"],
         expected_patterns=[
-            r"cpu", r"ram", r"disk",
+            r"cpu",
+            r"ram",
+            r"disk",
         ],
     )
 
     # ── Summary ──
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"RESULTS: {tests_passed}/{tests_run} passed")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Save full output for review
     with open("/tmp/jarvis_test_output.log", "w") as f:

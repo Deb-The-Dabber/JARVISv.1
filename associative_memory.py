@@ -7,10 +7,37 @@ import sqlite3
 DB_PATH = os.path.join(os.path.expanduser("~"), "jarvis_associations.db")
 
 STOPWORDS = {
-    "about", "after", "again", "also", "because", "could", "from", "have",
-    "here", "into", "just", "like", "more", "need", "please", "should",
-    "that", "the", "this", "what", "when", "where", "which", "with",
-    "would", "your", "you", "jarvis", "user", "assistant", "there",
+    "about",
+    "after",
+    "again",
+    "also",
+    "because",
+    "could",
+    "from",
+    "have",
+    "here",
+    "into",
+    "just",
+    "like",
+    "more",
+    "need",
+    "please",
+    "should",
+    "that",
+    "the",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+    "your",
+    "you",
+    "jarvis",
+    "user",
+    "assistant",
+    "there",
 }
 
 
@@ -53,27 +80,33 @@ def record_concepts(text: str):
     now = datetime.datetime.now().isoformat()
     with _connect() as conn:
         for concept1, concept2 in itertools.combinations(concepts, 2):
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO concept_pairs (concept1, concept2, count, last_seen)
                 VALUES (?, ?, 1, ?)
                 ON CONFLICT(concept1, concept2) DO UPDATE SET
                     count = count + 1,
                     last_seen = excluded.last_seen
-            """, (concept1, concept2, now))
+            """,
+                (concept1, concept2, now),
+            )
         conn.commit()
 
 
 def get_related_concepts(concept: str, limit: int = 5) -> list:
     c = concept.lower()
     with _connect() as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT CASE WHEN concept1 = ? THEN concept2 ELSE concept1 END AS related,
                    count
             FROM concept_pairs
             WHERE concept1 = ? OR concept2 = ?
             ORDER BY count DESC, last_seen DESC
             LIMIT ?
-        """, (c, c, c, limit)).fetchall()
+        """,
+            (c, c, c, limit),
+        ).fetchall()
     return rows
 
 

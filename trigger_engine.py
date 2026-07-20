@@ -68,10 +68,7 @@ def _load_triggers():
         _triggers = {r["id"]: dict(r) for r in rows}
 
 
-def create_trigger(name: str, trigger_type: str, schedule: str,
-                   action_type: str, action_target: str,
-                   action_params: dict | None = None,
-                   description: str = "") -> dict:
+def create_trigger(name: str, trigger_type: str, schedule: str, action_type: str, action_target: str, action_params: dict | None = None, description: str = "") -> dict:
     now = datetime.datetime.now().isoformat()
     params = json.dumps(action_params or {})
     with _connect() as conn:
@@ -80,8 +77,7 @@ def create_trigger(name: str, trigger_type: str, schedule: str,
                 """INSERT INTO triggers (name, description, trigger_type, schedule,
                    action_type, action_target, action_params, next_fire, created_at)
                    VALUES (?,?,?,?,?,?,?,?,?)""",
-                (name, description, trigger_type, schedule,
-                 action_type, action_target, params, _compute_next_fire(trigger_type, schedule), now)
+                (name, description, trigger_type, schedule, action_type, action_target, params, _compute_next_fire(trigger_type, schedule), now),
             )
             trigger_id = cur.lastrowid
         except sqlite3.IntegrityError as e:
@@ -108,8 +104,7 @@ def list_triggers(enabled_only: bool = False) -> list[dict]:
 
 
 def update_trigger(trigger_id: int, **kwargs) -> dict:
-    allowed = {"name", "description", "trigger_type", "schedule",
-               "action_type", "action_target", "action_params", "enabled"}
+    allowed = {"name", "description", "trigger_type", "schedule", "action_type", "action_target", "action_params", "enabled"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return get_trigger(trigger_id)
@@ -211,6 +206,7 @@ def _compute_next_fire(trigger_type: str, schedule: str) -> str | None:
 
 def _execute_workflow(name: str, params: dict) -> dict:
     from workflow_engine import run_workflow
+
     return run_workflow(name, params)
 
 
@@ -225,6 +221,7 @@ def _execute_tool(tool_name: str, args: dict) -> dict:
 def _execute_prompt(prompt_text: str) -> dict:
     try:
         from brain import process
+
         reply = process(prompt_text)
         return {"ok": True, "result": reply}
     except Exception:
@@ -273,33 +270,26 @@ def fire_trigger(trigger_id: int) -> dict:
         conn.execute(
             """UPDATE triggers SET last_fired=?, last_error=?, next_fire=?,
                enabled=?, fire_count=fire_count+1 WHERE id=?""",
-            (now, error, next_fire, enabled, trigger_id)
+            (now, error, next_fire, enabled, trigger_id),
         )
         conn.execute(
             """INSERT INTO trigger_history (trigger_id, triggered_at, status, result, error, duration_ms)
                VALUES (?,?,?,?,?,?)""",
-            (trigger_id, now, status, result, error, duration_ms)
+            (trigger_id, now, status, result, error, duration_ms),
         )
         conn.commit()
 
     _load_triggers()
-    return {"ok": status == "done", "status": status, "result": result,
-            "error": error, "duration_ms": duration_ms, "trigger_id": trigger_id}
+    return {"ok": status == "done", "status": status, "result": result, "error": error, "duration_ms": duration_ms, "trigger_id": trigger_id}
 
 
 def get_trigger_history(trigger_id: int | None = None, limit: int = 50) -> list[dict]:
     with _connect() as conn:
         conn.row_factory = sqlite3.Row
         if trigger_id is not None:
-            rows = conn.execute(
-                "SELECT * FROM trigger_history WHERE trigger_id=? ORDER BY triggered_at DESC LIMIT ?",
-                (trigger_id, limit)
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM trigger_history WHERE trigger_id=? ORDER BY triggered_at DESC LIMIT ?", (trigger_id, limit)).fetchall()
         else:
-            rows = conn.execute(
-                "SELECT * FROM trigger_history ORDER BY triggered_at DESC LIMIT ?",
-                (limit,)
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM trigger_history ORDER BY triggered_at DESC LIMIT ?", (limit,)).fetchall()
     return [dict(r) for r in rows]
 
 

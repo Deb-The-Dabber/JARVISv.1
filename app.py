@@ -15,6 +15,7 @@ def start_server():
     # We keep log_level="info" so you can see and COPY incoming requests!
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info", use_colors=True)
 
+
 print("  Starting backend server thread...")
 server_thread = threading.Thread(target=start_server, daemon=True)
 server_thread.start()

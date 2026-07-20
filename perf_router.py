@@ -99,6 +99,7 @@ def _intent_to_ttl(intent: str, default_ttl: int = 60) -> int:
 def semantic_cache_key(prompt: str, intent: str) -> str:
     try:
         from vector_memory import get_embedding
+
         emb = get_embedding(prompt)
         emb_str = str(hash(tuple(emb)))
         return f"{intent}:{emb_str}"

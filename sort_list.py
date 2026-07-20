@@ -1,10 +1,10 @@
 def sort_list(items, reverse=False):
     """Sort a list in ascending order by default.
-    
+
     Args:
         items: List to sort
         reverse: If True, sort in descending order (default: False)
-    
+
     Returns:
         A new sorted list
     """

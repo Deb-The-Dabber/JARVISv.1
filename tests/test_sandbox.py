@@ -33,6 +33,7 @@ class TestRunSandboxed:
 
     def test_memory_limit(self):
         from sandbox import run_sandboxed
+
         os.environ["JARVIS_SANDBOX_ENABLED"] = "0"
         try:
             code = "import resource, sys\nresource.setrlimit(resource.RLIMIT_AS, (1, 1))\nsys.stdout.write('ok')"
@@ -65,8 +66,10 @@ class TestRunSandboxedPython:
 
     def test_file_write_in_sandbox(self):
         from sandbox import _use_sandbox
+
         if _use_sandbox():
             import shutil
+
             if shutil.which("sandbox-exec") is not None:
                 pytest.skip("sandbox-exec profile may block file writes, depends on macOS version")
         result = run_sandboxed_python("""
@@ -126,8 +129,10 @@ class TestRunDir:
 
     def test_dir_is_writable(self):
         from sandbox import _use_sandbox
+
         if _use_sandbox():
             import shutil
+
             if shutil.which("sandbox-exec") is not None:
                 pytest.skip("sandbox-exec profile may block file writes, depends on macOS version")
         result = run_sandboxed_python("""

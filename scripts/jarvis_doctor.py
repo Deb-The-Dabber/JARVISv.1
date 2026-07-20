@@ -88,10 +88,7 @@ check("Free disk space", free_gb > 1, f"{free_gb:.1f}GB free")
 
 log_dir = os.path.expanduser("~/.jarvis/logs")
 if os.path.exists(log_dir):
-    log_size = sum(
-        os.path.getsize(os.path.join(log_dir, f)) for f in os.listdir(log_dir)
-        if os.path.isfile(os.path.join(log_dir, f))
-    )
+    log_size = sum(os.path.getsize(os.path.join(log_dir, f)) for f in os.listdir(log_dir) if os.path.isfile(os.path.join(log_dir, f)))
     check("Log directory", True, f"{log_size / 1024:.0f}KB")
 else:
     check("Log directory", True, "skip")
@@ -99,8 +96,14 @@ else:
 # ── 4. Import check ──
 print("\n--- Core Imports ---")
 modules = [
-    "cache", "config", "safety", "jarvis_logger",
-    "memory", "vector_memory", "priority", "watchlog",
+    "cache",
+    "config",
+    "safety",
+    "jarvis_logger",
+    "memory",
+    "vector_memory",
+    "priority",
+    "watchlog",
 ]
 for mod_name in modules:
     try:
@@ -152,9 +155,9 @@ try:
     from jarvis_logger import get_cost_summary, get_latest_logs, get_metrics_snapshot
 
     metrics = get_metrics_snapshot()
-    check("Metrics available", bool(metrics), f'{metrics["requests_total"]} requests')
+    check("Metrics available", bool(metrics), f"{metrics['requests_total']} requests")
     cost = get_cost_summary()
-    check("Cost tracker", True, f'${cost.get("cost_usd_total", 0):.4f} total')
+    check("Cost tracker", True, f"${cost.get('cost_usd_total', 0):.4f} total")
     logs = get_latest_logs(1)
     check("Log file", len(logs) >= 0, f"{len(logs)} recent entries")
 except Exception as e:
@@ -164,9 +167,12 @@ except Exception as e:
 print("\n--- Supply Chain ---")
 try:
     import subprocess
+
     result = subprocess.run(
         [sys.executable, "-m", "pip_audit", "--desc"],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     ok = result.returncode == 0
     check("pip-audit", ok, "No vulns" if ok else result.stdout[:200])
@@ -175,9 +181,12 @@ except Exception as e:
 
 try:
     import subprocess
+
     result = subprocess.run(
         [sys.executable, "-m", "safety", "check"],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     check("safety check", True, "done")
 except Exception as e:
@@ -185,9 +194,12 @@ except Exception as e:
 
 try:
     import subprocess
+
     result = subprocess.run(
         ["git", "secrets", "--scan", "-r"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     check("git-secrets", result.returncode == 0)
 except Exception as e:
@@ -206,6 +218,7 @@ except Exception as e:
 
 try:
     from tts import EDGE_TTS_VOICE, ELEVENLABS_API_KEY
+
     check("TTS ElevenLabs key", bool(ELEVENLABS_API_KEY))
     check("TTS Edge voice", bool(EDGE_TTS_VOICE), EDGE_TTS_VOICE)
 except Exception as e:
@@ -213,6 +226,7 @@ except Exception as e:
 
 try:
     import pvporcupine
+
     check("Porcupine wake word", True, f"v{pvporcupine.__version__}")
 except ImportError:
     check("Porcupine wake word", True, "skip (not installed)")
@@ -221,6 +235,7 @@ except Exception as e:
 
 try:
     from stt import _model_kind
+
     check("STT backend", True, _model_kind or "unknown")
 except Exception:
     pass

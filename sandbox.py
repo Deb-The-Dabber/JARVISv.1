@@ -15,6 +15,8 @@ SANDBOX_DIR = os.path.join(tempfile.gettempdir(), "jarvis_sandbox")
 
 def _use_sandbox() -> bool:
     return os.getenv("JARVIS_SANDBOX_ENABLED", "1").lower() in ("1", "true", "yes")
+
+
 DEFAULT_TIMEOUT = 30
 DEFAULT_MEMORY_MB = 256
 DEFAULT_CPU_SECONDS = 30
@@ -79,14 +81,16 @@ def _build_sandbox_exec_args(base_args: list, run_dir: str, allow_network: bool)
     esc_dir = real_dir.replace('"', '\\"')
     esc_jarvis = os.path.realpath(os.path.expanduser("~/.jarvis")).replace('"', '\\"')
 
-    write_rules = "\n".join([
-        f'(allow file-write* (subpath "{esc_dir}"))',
-        '(allow file-write* (subpath "/tmp"))',
-        '(allow file-write* (subpath "/private/tmp"))',
-        f'(allow file-write* (subpath "{esc_jarvis}"))',
-    ])
+    write_rules = "\n".join(
+        [
+            f'(allow file-write* (subpath "{esc_dir}"))',
+            '(allow file-write* (subpath "/tmp"))',
+            '(allow file-write* (subpath "/private/tmp"))',
+            f'(allow file-write* (subpath "{esc_jarvis}"))',
+        ]
+    )
 
-    net = '(allow network*)' if allow_network else '(deny network*)'
+    net = "(allow network*)" if allow_network else "(deny network*)"
 
     profile = f"""(version 1)
 (deny default)
@@ -115,18 +119,20 @@ def _try_sandbox_exec(args: list, run_dir: str, allow_network: bool) -> list | N
     return _build_sandbox_exec_args(args, run_dir, allow_network)
 
 
-def run_sandboxed(args: list | str, *,
-                  timeout: int = DEFAULT_TIMEOUT,
-                  memory_mb: int = DEFAULT_MEMORY_MB,
-                  cpu_seconds: int = DEFAULT_CPU_SECONDS,
-                  allow_network: bool = False,
-                  shell: bool = False,
-                  cwd: str | None = None,
-                  env: dict | None = None) -> dict:
+def run_sandboxed(
+    args: list | str,
+    *,
+    timeout: int = DEFAULT_TIMEOUT,
+    memory_mb: int = DEFAULT_MEMORY_MB,
+    cpu_seconds: int = DEFAULT_CPU_SECONDS,
+    allow_network: bool = False,
+    shell: bool = False,
+    cwd: str | None = None,
+    env: dict | None = None,
+) -> dict:
     started = time.time()
     run_dir = _make_run_dir()
-    result = {"ok": False, "stdout": "", "stderr": "", "exit_code": -1,
-              "duration_ms": 0, "error": "", "sandboxed": False, "run_dir": run_dir}
+    result = {"ok": False, "stdout": "", "stderr": "", "exit_code": -1, "duration_ms": 0, "error": "", "sandboxed": False, "run_dir": run_dir}
 
     enable_sandbox = _use_sandbox()
     final_args = args
@@ -173,19 +179,14 @@ def run_sandboxed(args: list | str, *,
     return result
 
 
-def run_sandboxed_python(code: str, *,
-                         timeout: int = DEFAULT_TIMEOUT,
-                         memory_mb: int = DEFAULT_MEMORY_MB,
-                         cpu_seconds: int = DEFAULT_CPU_SECONDS) -> dict:
+def run_sandboxed_python(code: str, *, timeout: int = DEFAULT_TIMEOUT, memory_mb: int = DEFAULT_MEMORY_MB, cpu_seconds: int = DEFAULT_CPU_SECONDS) -> dict:
     run_dir = _make_run_dir()
     script_path = os.path.join(run_dir, "script.py")
     try:
         with open(script_path, "w") as f:
             f.write(code)
     except Exception as e:
-        return {"ok": False, "stdout": "", "stderr": "", "exit_code": -1,
-                "duration_ms": 0, "error": f"Could not write script: {e}",
-                "sandboxed": False, "run_dir": run_dir}
+        return {"ok": False, "stdout": "", "stderr": "", "exit_code": -1, "duration_ms": 0, "error": f"Could not write script: {e}", "sandboxed": False, "run_dir": run_dir}
 
     result = run_sandboxed(
         ["python", script_path],
@@ -203,11 +204,7 @@ def run_sandboxed_python(code: str, *,
     return result
 
 
-def run_sandboxed_command(command: str, *,
-                          timeout: int = DEFAULT_TIMEOUT,
-                          memory_mb: int = DEFAULT_MEMORY_MB,
-                          cpu_seconds: int = DEFAULT_CPU_SECONDS,
-                          allow_network: bool = False) -> dict:
+def run_sandboxed_command(command: str, *, timeout: int = DEFAULT_TIMEOUT, memory_mb: int = DEFAULT_MEMORY_MB, cpu_seconds: int = DEFAULT_CPU_SECONDS, allow_network: bool = False) -> dict:
     return run_sandboxed(
         command,
         timeout=timeout,

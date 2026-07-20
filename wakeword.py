@@ -9,10 +9,10 @@ from terminal import RECORD_SAMPLE_RATE
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-CHUNK_SIZE    = 1280   # OWW expects 80ms chunks at 16kHz
+CHUNK_SIZE = 1280  # OWW expects 80ms chunks at 16kHz
 RECORD_SAMPLE_RATE = 44100
 SAMPLE_RATE = 16000
-CHANNELS      = 1
+CHANNELS = 1
 
 # Wake words to listen for
 WAKE_WORDS = ["hey_jarvis", "jarvis"]
@@ -24,10 +24,10 @@ SENSITIVITY = 0.3
 # ─────────────────────────────────────────────
 # STATE
 # ─────────────────────────────────────────────
-_running   = False
-_thread    = None
-_callback  = None   # Called when wake word detected
-_model     = None
+_running = False
+_thread = None
+_callback = None  # Called when wake word detected
+_model = None
 _model_lock = threading.Lock()
 
 
@@ -35,6 +35,7 @@ def _resolve_sd_input_device():
     """Resolve a valid SoundDevice input index, avoiding default -1 errors."""
     try:
         import sounddevice as sd
+
         devices = sd.query_devices()
     except Exception:
         return None
@@ -77,6 +78,7 @@ def _resolve_pyaudio_input_device(pa):
             continue
     return None
 
+
 # ─────────────────────────────────────────────
 # LOAD MODEL
 # ─────────────────────────────────────────────
@@ -88,18 +90,17 @@ def _load_model():
         print("  Loading OpenWakeWord model...")
         try:
             from openwakeword.model import Model
+
             # Try to load hey_jarvis model first
             # OWW will download it automatically on first run
-            _model = Model(
-                wakeword_models=["hey_jarvis"],
-                inference_framework="onnx"
-            )
+            _model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
             print("  OpenWakeWord ready — listening for 'Hey Jarvis'")
         except Exception as e:
             print(f"  OWW model load failed: {e}")
             print("  Falling back to 'jarvis' keyword detection via Whisper...")
             _model = None
         return _model
+
 
 # ─────────────────────────────────────────────
 # CONTEXT CHECK (is user talking TO Jarvis?)
@@ -121,23 +122,51 @@ def _should_activate(transcript: str) -> bool:
 
     # Quick keyword check first (saves LLM call)
     # If followed by a verb or command word → likely talking TO Jarvis
-    command_words = ["open","close","play","pause","skip","search","find",
-                     "what","how","when","where","why","who","set","turn",
-                     "show","tell","run","check","get","make","create","can",
-                     "could","would","is","are","do","did","will","help"]
-    words = t.replace("jarvis","").strip().split()
+    command_words = [
+        "open",
+        "close",
+        "play",
+        "pause",
+        "skip",
+        "search",
+        "find",
+        "what",
+        "how",
+        "when",
+        "where",
+        "why",
+        "who",
+        "set",
+        "turn",
+        "show",
+        "tell",
+        "run",
+        "check",
+        "get",
+        "make",
+        "create",
+        "can",
+        "could",
+        "would",
+        "is",
+        "are",
+        "do",
+        "did",
+        "will",
+        "help",
+    ]
+    words = t.replace("jarvis", "").strip().split()
     if words and words[0] in command_words:
         return True
 
     # Talking ABOUT Jarvis patterns
-    about_patterns = ["jarvis is","jarvis was","jarvis looks","jarvis seems",
-                      "jarvis can","jarvis could","jarvis would","jarvis has",
-                      "about jarvis","like jarvis","jarvis so"]
+    about_patterns = ["jarvis is", "jarvis was", "jarvis looks", "jarvis seems", "jarvis can", "jarvis could", "jarvis would", "jarvis has", "about jarvis", "like jarvis", "jarvis so"]
     if any(p in t for p in about_patterns):
         return False
 
     # For ambiguous cases, prefer activation for responsiveness.
     return True
+
 
 # ─────────────────────────────────────────────
 # AUDIO LISTENER (OWW-based)
@@ -185,7 +214,7 @@ def _oww_listener():
             # Check all wake word scores
             activated = False
             for wake_word, scores in prediction.items():
-                score = scores[-1] if hasattr(scores, '__len__') else scores
+                score = scores[-1] if hasattr(scores, "__len__") else scores
                 if score > SENSITIVITY:
                     activated = True
                     break
@@ -193,10 +222,7 @@ def _oww_listener():
             if activated and time.time() > cooldown_until:
                 cooldown_until = time.time() + 2  # 2 second cooldown
                 if _callback:
-                    threading.Thread(
-                        target=_callback,
-                        daemon=True
-                    ).start()
+                    threading.Thread(target=_callback, daemon=True).start()
 
         except Exception:
             if _running:
@@ -205,6 +231,7 @@ def _oww_listener():
     stream.stop_stream()
     stream.close()
     pa.terminate()
+
 
 # ─────────────────────────────────────────────
 # FALLBACK LISTENER (Whisper-based, if OWW fails)
@@ -233,7 +260,7 @@ def _fallback_listener():
                 int(2 * RECORD_SAMPLE_RATE),
                 samplerate=RECORD_SAMPLE_RATE,
                 channels=1,
-                dtype='int16',
+                dtype="int16",
                 device=sd_input_device,
             )
             sd.wait()
@@ -250,6 +277,7 @@ def _fallback_listener():
 
             try:
                 from stt import transcribe_file
+
                 text = transcribe_file(tmp).lower().strip()
             finally:
                 try:
@@ -266,14 +294,12 @@ def _fallback_listener():
                     cooldown_until = time.time() + 3
                     print(f"  Wake word detected: '{text}'")
                     if _callback:
-                        threading.Thread(
-                            target=_callback,
-                            daemon=True
-                        ).start()
+                        threading.Thread(target=_callback, daemon=True).start()
 
         except Exception:
             if _running:
                 time.sleep(0.5)
+
 
 # ─────────────────────────────────────────────
 # PUBLIC API
@@ -290,10 +316,12 @@ def start(callback):
     _thread.start()
     print("  Wake word engine started.")
 
+
 def stop():
     global _running
     _running = False
     print("  Wake word engine stopped.")
+
 
 def is_running() -> bool:
     return _running

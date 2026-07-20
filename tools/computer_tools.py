@@ -130,6 +130,7 @@ def take_screenshot():
 
 def run_terminal_command(command: str):
     from sandbox import run_sandboxed_command
+
     original_command = command
     # Robust macOS rewrite: case-insensitive regex for Linux ps patterns
     ps_rewrites = [

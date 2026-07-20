@@ -11,35 +11,33 @@ DB_PATH = os.path.join(os.path.expanduser("~"), "jarvis_priority.db")
 # PRIORITY LEVELS
 # ─────────────────────────────────────────────
 CRITICAL = 10  # Always speak, interrupt if needed
-HIGH     = 7   # Speak if user active
-MEDIUM   = 4   # Speak max once per hour
-LOW      = 1   # Silent, mention in recap only
+HIGH = 7  # Speak if user active
+MEDIUM = 4  # Speak max once per hour
+LOW = 1  # Silent, mention in recap only
 
 # Base priorities for each alert type
 BASE_PRIORITIES = {
     # CRITICAL — time sensitive
-    "calendar_5min":     CRITICAL,
-    "calendar_15min":    CRITICAL,
-    "security":          CRITICAL,
-    "internet_down":     HIGH,
-
+    "calendar_5min": CRITICAL,
+    "calendar_15min": CRITICAL,
+    "security": CRITICAL,
+    "internet_down": HIGH,
     # HIGH — important but not urgent
-    "cpu_spike":         HIGH,
-    "ram_high":          HIGH,
-    "disk_low":          HIGH,
-    "rain_incoming":     HIGH,
-    "storm_incoming":    CRITICAL,
-
+    "cpu_spike": HIGH,
+    "ram_high": HIGH,
+    "disk_low": HIGH,
+    "rain_incoming": HIGH,
+    "storm_incoming": CRITICAL,
     # MEDIUM — useful but not urgent
-    "app_open_long":     MEDIUM,
-    "evening_summary":   MEDIUM,
-    "startup_briefing":  MEDIUM,
-
+    "app_open_long": MEDIUM,
+    "evening_summary": MEDIUM,
+    "startup_briefing": MEDIUM,
     # LOW — background noise
-    "downloads_large":   LOW,
-    "desktop_clutter":   LOW,
-    "weather_update":    LOW,
+    "downloads_large": LOW,
+    "desktop_clutter": LOW,
+    "weather_update": LOW,
 }
+
 
 # ─────────────────────────────────────────────
 # DATABASE
@@ -90,10 +88,7 @@ def init_db():
 def log_alert(alert_type: str, message: str, priority: int, spoken: bool = False):
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO alert_history (alert_type, message, priority, spoken, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (alert_type, message, priority, int(spoken),
-             datetime.datetime.now().isoformat())
+            "INSERT INTO alert_history (alert_type, message, priority, spoken, created_at) VALUES (?, ?, ?, ?, ?)", (alert_type, message, priority, int(spoken), datetime.datetime.now().isoformat())
         )
         conn.commit()
 
@@ -101,11 +96,7 @@ def log_alert(alert_type: str, message: str, priority: int, spoken: bool = False
 def add_notification(alert_type: str, message: str, priority: int):
     """Persist an alert to the notifications inbox."""
     with _connect() as conn:
-        conn.execute(
-            "INSERT INTO notifications (alert_type, message, priority, read, created_at) "
-            "VALUES (?, ?, ?, 0, ?)",
-            (alert_type, message, priority, datetime.datetime.now().isoformat())
-        )
+        conn.execute("INSERT INTO notifications (alert_type, message, priority, read, created_at) VALUES (?, ?, ?, 0, ?)", (alert_type, message, priority, datetime.datetime.now().isoformat()))
         conn.commit()
 
 
@@ -113,30 +104,15 @@ def get_notifications(unread_only: bool = True, limit: int = 50) -> list[dict]:
     """Fetch notifications from the inbox."""
     with _connect() as conn:
         if unread_only:
-            rows = conn.execute(
-                "SELECT id, alert_type, message, priority, read, created_at "
-                "FROM notifications WHERE read = 0 ORDER BY created_at DESC LIMIT ?",
-                (limit,)
-            ).fetchall()
+            rows = conn.execute("SELECT id, alert_type, message, priority, read, created_at FROM notifications WHERE read = 0 ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         else:
-            rows = conn.execute(
-                "SELECT id, alert_type, message, priority, read, created_at "
-                "FROM notifications ORDER BY created_at DESC LIMIT ?",
-                (limit,)
-            ).fetchall()
-    return [
-        {"id": r[0], "alert_type": r[1], "message": r[2],
-         "priority": r[3], "read": bool(r[4]), "created_at": r[5]}
-        for r in rows
-    ]
+            rows = conn.execute("SELECT id, alert_type, message, priority, read, created_at FROM notifications ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    return [{"id": r[0], "alert_type": r[1], "message": r[2], "priority": r[3], "read": bool(r[4]), "created_at": r[5]} for r in rows]
 
 
 def mark_notification_read(notification_id: int):
     with _connect() as conn:
-        conn.execute(
-            "UPDATE notifications SET read = 1 WHERE id = ?",
-            (notification_id,)
-        )
+        conn.execute("UPDATE notifications SET read = 1 WHERE id = ?", (notification_id,))
         conn.commit()
 
 
@@ -150,13 +126,17 @@ def mark_acknowledged(alert_type: str):
     """Call this when user responds to an alert."""
     with _connect() as conn:
         # Mark most recent of this type as acknowledged
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE alert_history SET acknowledged = 1
             WHERE alert_type = ? AND spoken = 1
             AND id = (SELECT MAX(id) FROM alert_history WHERE alert_type = ? AND spoken = 1)
-        """, (alert_type, alert_type))
+        """,
+            (alert_type, alert_type),
+        )
         # Update learned priorities
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO learned_priorities
                 (alert_type, base_priority, adjusted_priority, ack_count, last_updated)
             VALUES (?, ?, ?, 1, ?)
@@ -164,17 +144,17 @@ def mark_acknowledged(alert_type: str):
                 ack_count = ack_count + 1,
                 adjusted_priority = MIN(10, adjusted_priority + 0.5),
                 last_updated = excluded.last_updated
-        """, (alert_type,
-              BASE_PRIORITIES.get(alert_type, MEDIUM),
-              BASE_PRIORITIES.get(alert_type, MEDIUM),
-              datetime.datetime.now().isoformat()))
+        """,
+            (alert_type, BASE_PRIORITIES.get(alert_type, MEDIUM), BASE_PRIORITIES.get(alert_type, MEDIUM), datetime.datetime.now().isoformat()),
+        )
         conn.commit()
 
 
 def mark_ignored(alert_type: str):
     """Call this when an alert was spoken but user didn't respond."""
     with _connect() as conn:
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO learned_priorities
                 (alert_type, base_priority, adjusted_priority, ignore_count, last_updated)
             VALUES (?, ?, ?, 1, ?)
@@ -182,10 +162,9 @@ def mark_ignored(alert_type: str):
                 ignore_count = ignore_count + 1,
                 adjusted_priority = MAX(0.5, adjusted_priority - 0.3),
                 last_updated = excluded.last_updated
-        """, (alert_type,
-              BASE_PRIORITIES.get(alert_type, MEDIUM),
-              BASE_PRIORITIES.get(alert_type, MEDIUM),
-              datetime.datetime.now().isoformat()))
+        """,
+            (alert_type, BASE_PRIORITIES.get(alert_type, MEDIUM), BASE_PRIORITIES.get(alert_type, MEDIUM), datetime.datetime.now().isoformat()),
+        )
         conn.commit()
 
 
@@ -193,10 +172,7 @@ def get_effective_priority(alert_type: str) -> float:
     """Get the current effective priority — base adjusted by learning."""
     base = BASE_PRIORITIES.get(alert_type, MEDIUM)
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT adjusted_priority FROM learned_priorities WHERE alert_type = ?",
-            (alert_type,)
-        ).fetchone()
+        row = conn.execute("SELECT adjusted_priority FROM learned_priorities WHERE alert_type = ?", (alert_type,)).fetchone()
     if row:
         return float(row[0])
     return float(base)
@@ -205,25 +181,17 @@ def get_effective_priority(alert_type: str) -> float:
 def get_priority_stats() -> list:
     """Get all learned priorities for display."""
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT alert_type, base_priority, adjusted_priority, "
-            "ignore_count, ack_count FROM learned_priorities "
-            "ORDER BY adjusted_priority DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT alert_type, base_priority, adjusted_priority, ignore_count, ack_count FROM learned_priorities ORDER BY adjusted_priority DESC").fetchall()
     return rows
 
 
 def was_recently_spoken(alert_type: str, minutes: int = 60) -> bool:
     """Check if this alert type was spoken recently."""
-    since = (datetime.datetime.now() -
-             datetime.timedelta(minutes=minutes)).isoformat()
+    since = (datetime.datetime.now() - datetime.timedelta(minutes=minutes)).isoformat()
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM alert_history "
-            "WHERE alert_type = ? AND spoken = 1 AND created_at > ?",
-            (alert_type, since)
-        ).fetchone()
+        row = conn.execute("SELECT COUNT(*) FROM alert_history WHERE alert_type = ? AND spoken = 1 AND created_at > ?", (alert_type, since)).fetchone()
     return row[0] > 0
+
 
 # ─────────────────────────────────────────────
 # ALERT QUEUE
@@ -240,6 +208,7 @@ _recent_messages = {}
 RECENT_MESSAGE_TTL = 120  # seconds — skip same message within this window
 
 MIN_SECONDS_BETWEEN_ALERTS = 30  # Never fire more than 1 alert per 30s
+
 
 def queue_alert(alert_type: str, message: str, force: bool = False):
     """
@@ -276,14 +245,12 @@ def queue_alert(alert_type: str, message: str, force: bool = False):
 
     # Don't re-queue if spoken recently
     cooldowns = {
-        CRITICAL: 5,    # 5 min cooldown for critical
-        HIGH: 60,       # 1 hour for high
-        MEDIUM: 120,    # 2 hours for medium
-        LOW: 480,       # 8 hours for low
+        CRITICAL: 5,  # 5 min cooldown for critical
+        HIGH: 60,  # 1 hour for high
+        MEDIUM: 120,  # 2 hours for medium
+        LOW: 480,  # 8 hours for low
     }
-    cooldown_mins = cooldowns.get(
-        int(priority) if int(priority) in cooldowns else MEDIUM, 60
-    )
+    cooldown_mins = cooldowns.get(int(priority) if int(priority) in cooldowns else MEDIUM, 60)
     if not force and was_recently_spoken(alert_type, minutes=cooldown_mins):
         return
 
@@ -300,6 +267,7 @@ def _should_speak(priority: float, user_active: bool) -> bool:
     if priority >= HIGH:
         return True
     return False
+
 
 # ─────────────────────────────────────────────
 # ALERT PROCESSOR
@@ -372,11 +340,7 @@ def _process_queue():
                         if _current_alert_type == atype:
                             mark_ignored(atype)
 
-                threading.Thread(
-                    target=_check_ignored,
-                    args=(alert_type,),
-                    daemon=True
-                ).start()
+                threading.Thread(target=_check_ignored, args=(alert_type,), daemon=True).start()
 
             except Exception as e:
                 print(f"  Priority engine speak error: {e}")

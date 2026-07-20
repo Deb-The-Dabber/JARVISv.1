@@ -76,14 +76,16 @@ def _merge_tool_plugin(name: str, tools: list[dict]):
                 print(f"  [Plugin] Tool '{fn_name}' already registered — skipping")
                 continue
             TOOL_REGISTRY[fn_name] = handler
-            TOOL_DEFINITIONS.append({
-                "type": "function",
-                "function": {
-                    "name": fn_name,
-                    "description": description,
-                    "parameters": parameters,
-                },
-            })
+            TOOL_DEFINITIONS.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": fn_name,
+                        "description": description,
+                        "parameters": parameters,
+                    },
+                }
+            )
             print(f"  [Plugin] Registered tool: {fn_name}")
 
 
@@ -96,12 +98,14 @@ def _merge_provider_plugin(name: str, providers: list[dict]):
             print(f"  [Plugin] Skipping provider entry in {name}: missing name or handler")
             continue
         with PLUGIN_LOCK:
-            _plugin_providers.append({
-                "name": p_name,
-                "handler": handler,
-                "priority": priority,
-                "plugin": name,
-            })
+            _plugin_providers.append(
+                {
+                    "name": p_name,
+                    "handler": handler,
+                    "priority": priority,
+                    "plugin": name,
+                }
+            )
             _plugin_providers.sort(key=lambda x: x["priority"], reverse=True)
             print(f"  [Plugin] Registered provider: {p_name} (priority {priority})")
 
@@ -190,10 +194,7 @@ def _install_from_git(url: str) -> dict:
     if os.path.exists(dest):
         return {"ok": False, "error": f"Plugin '{name}' already installed"}
     try:
-        subprocess.run(
-            ["git", "clone", url, dest],
-            capture_output=True, text=True, check=True, timeout=60
-        )
+        subprocess.run(["git", "clone", url, dest], capture_output=True, text=True, check=True, timeout=60)
         return {"ok": True, "name": name, "action": "cloned"}
     except subprocess.CalledProcessError as e:
         return {"ok": False, "error": f"git clone failed: {e.stderr[:200]}"}
@@ -203,6 +204,7 @@ def _install_from_git(url: str) -> dict:
 
 def _install_from_url(url: str) -> dict:
     import requests
+
     name = url.rstrip("/").rsplit("/", 1)[-1].replace(".tar.gz", "").replace(".zip", "")
     dest = os.path.join(PLUGIN_DIR, name)
     if os.path.exists(dest):
@@ -241,13 +243,15 @@ def list_available_plugins() -> list[dict]:
             try:
                 with open(manifest_path) as f:
                     m = yaml.safe_load(f) or {}
-                results.append({
-                    "name": name,
-                    "version": m.get("version", "?"),
-                    "description": m.get("description", ""),
-                    "type": m.get("type", "unknown"),
-                    "loaded": name in _loaded_plugins,
-                })
+                results.append(
+                    {
+                        "name": name,
+                        "version": m.get("version", "?"),
+                        "description": m.get("description", ""),
+                        "type": m.get("type", "unknown"),
+                        "loaded": name in _loaded_plugins,
+                    }
+                )
             except Exception:
                 results.append({"name": name, "error": "bad manifest"})
         else:

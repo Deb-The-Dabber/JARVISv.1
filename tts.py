@@ -105,6 +105,7 @@ def _stream_with_mpv(audio_stream, job: _SpeechJob):
 
 def _speak_with_elevenlabs(job: _SpeechJob, text: str):
     from config import TTS_RETRY_BASE_DELAY, TTS_RETRY_MAX_ATTEMPTS
+
     for attempt in range(1, TTS_RETRY_MAX_ATTEMPTS + 1):
         try:
             from elevenlabs import ElevenLabs

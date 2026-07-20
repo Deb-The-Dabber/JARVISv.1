@@ -81,19 +81,14 @@ def get_stock_time_series(symbol: str, interval: str = "daily"):
 
 def get_forex_rate(from_currency: str, to_currency: str):
     """Get real-time exchange rate between two currencies."""
-    params = {"function": "CURRENCY_EXCHANGE_RATE",
-               "from_currency": from_currency.upper(),
-               "to_currency": to_currency.upper()}
+    params = {"function": "CURRENCY_EXCHANGE_RATE", "from_currency": from_currency.upper(), "to_currency": to_currency.upper()}
     data = _get(params)
     if isinstance(data, str):
         return data
     rate = data.get("Realtime Currency Exchange Rate", {})
     if not rate:
         return f"No forex rate found for {from_currency}/{to_currency}."
-    return (
-        f"{from_currency.upper()}/{to_currency.upper()}: {rate.get('5. Exchange Rate', 'N/A')} "
-        f"(bid: {rate.get('8. Bid Price', 'N/A')} ask: {rate.get('9. Ask Price', 'N/A')})"
-    )
+    return f"{from_currency.upper()}/{to_currency.upper()}: {rate.get('5. Exchange Rate', 'N/A')} (bid: {rate.get('8. Bid Price', 'N/A')} ask: {rate.get('9. Ask Price', 'N/A')})"
 
 
 def get_crypto_quote(symbol: str):

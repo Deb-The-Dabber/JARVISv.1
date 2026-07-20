@@ -174,9 +174,7 @@ def record_and_transcribe(seconds=RECORD_SECONDS) -> str:
                 device=_INPUT_DEVICE_INDEX,
             )
             sd.wait()
-            audio_resampled = signal.resample(audio, int(len(audio) * SAMPLE_RATE / RECORD_SAMPLE_RATE)).astype(
-                np.int16
-            )
+            audio_resampled = signal.resample(audio, int(len(audio) * SAMPLE_RATE / RECORD_SAMPLE_RATE)).astype(np.int16)
         except Exception as e2:
             print(f"  Fallback mic error: {e2}")
             return ""
@@ -200,11 +198,12 @@ def record_and_transcribe(seconds=RECORD_SECONDS) -> str:
 # SCHEDULER
 # ─────────────────────────────────────────────
 
+
 class Priority(IntEnum):
-    HIGH = 0          # stop, cancel, interrupt
-    FOREGROUND = 1    # user commands (voice/text)
-    BACKGROUND = 2    # proactive, learner, timers
-    LOW = 3           # self-analysis, scans
+    HIGH = 0  # stop, cancel, interrupt
+    FOREGROUND = 1  # user commands (voice/text)
+    BACKGROUND = 2  # proactive, learner, timers
+    LOW = 3  # self-analysis, scans
 
 
 class InputMode:
@@ -222,42 +221,42 @@ _queue_buffer: list[str] = []
 # MULTI-PROBLEM DETECTION
 # ─────────────────────────────────────────────
 def extract_problems(text: str) -> list[str]:
-    lines = text.strip().split('\n')
+    lines = text.strip().split("\n")
     problem_headers = []
     for i, line in enumerate(lines):
         s = line.strip()
-        if re.match(r'^(?:Problem|Question|Challenge)\s+\d+', s, re.IGNORECASE):
+        if re.match(r"^(?:Problem|Question|Challenge)\s+\d+", s, re.IGNORECASE):
             problem_headers.append(i)
-        elif re.match(r'^\d+[.)]\s', s) and len(s) > 4:
+        elif re.match(r"^\d+[.)]\s", s) and len(s) > 4:
             problem_headers.append(i)
     if problem_headers and len(problem_headers) >= 2:
         problems = []
         for idx, start in enumerate(problem_headers):
             end = problem_headers[idx + 1] if idx + 1 < len(problem_headers) else len(lines)
-            p = '\n'.join(lines[start:end]).strip()
+            p = "\n".join(lines[start:end]).strip()
             if p:
                 problems.append(p)
         return problems
     # Check for separator patterns like ---, ***, ___
-    if re.search(r'^[-*_]{3,}\s*$', text, re.MULTILINE):
-        paragraphs = [p.strip() for p in re.split(r'\n[-*_]{3,}\s*\n', text) if p.strip()]
+    if re.search(r"^[-*_]{3,}\s*$", text, re.MULTILINE):
+        paragraphs = [p.strip() for p in re.split(r"\n[-*_]{3,}\s*\n", text) if p.strip()]
         if len(paragraphs) >= 3:
             return paragraphs
-    paragraphs = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     if len(paragraphs) >= 3:
         return paragraphs
     return [text]
 
 
 def prompt_problem_strategy(problem_count: int) -> tuple[str, list[int] | None]:
-    print(f"\n  {'='*45}")
+    print(f"\n  {'=' * 45}")
     print(f"  Detected {problem_count} problems/questions")
-    print(f"  {'='*45}")
+    print(f"  {'=' * 45}")
     print("    [1] Sequential — ask before each")
     print("    [2] Auto — solve all without asking")
     print("    [3] Pick — select which to solve")
     print("    [4] First — solve only the first")
-    print(f"  {'='*45}")
+    print(f"  {'=' * 45}")
     choice = input("  Strategy (1-4, Enter=1): ").strip()
     choice = choice or "1"
     if choice == "3":
@@ -282,7 +281,7 @@ def handle_multi_problem(problems: list[str], strategy: str, selected: list[int]
 
     for idx in indices:
         problem = problems[idx]
-        print(f"\n  {'─'*40}")
+        print(f"\n  {'─' * 40}")
         print(f"  Problem {idx + 1}/{len(problems)}:")
         preview = problem[:200] + "..." if len(problem) > 200 else problem
         print(f"  {preview}")
@@ -299,6 +298,7 @@ def handle_multi_problem(problems: list[str], strategy: str, selected: list[int]
 
         handle_input(problem)
 
+
 @dataclass(order=True)
 class TaskData:
     priority: Priority
@@ -308,6 +308,7 @@ class TaskData:
 
 class RequestScheduler:
     """Two-tier priority scheduler: foreground (ordered, 1 worker) + background (configurable workers)."""
+
     _stdout_lock = threading.Lock()
 
     def __init__(self, foreground_workers: int = 1, background_workers: int = 1):
@@ -677,10 +678,7 @@ def main():
 
                 for t in list_triggers():
                     status = "✓" if t["enabled"] else "✗"
-                    print(
-                        f"  [{t['id']}] {status} {t['name']} ({t['trigger_type']}/{t['action_type']})"
-                        f" — {t.get('description', '')}"
-                    )
+                    print(f"  [{t['id']}] {status} {t['name']} ({t['trigger_type']}/{t['action_type']}) — {t.get('description', '')}")
                     if t.get("next_fire"):
                         print(f"       next: {t['next_fire']}, count: {t['fire_count']}")
 
@@ -755,18 +753,21 @@ def main():
 
             elif user_input.lower().startswith("vision analyze "):
                 from tools.vision_tools import analyze_image
+
                 path = user_input[15:].strip()
                 result = analyze_image(path=path)
                 print(f"  {result[:300]}")
 
             elif user_input.lower().startswith("vision ocr "):
                 from tools.vision_tools import ocr_document
+
                 path = user_input[11:].strip()
                 result = ocr_document(path)
                 print(f"  {result[:300]}")
 
             elif user_input.lower().startswith("vision video "):
                 from tools.vision_tools import analyze_video
+
                 parts = user_input[13:].strip().split()
                 path = parts[0] if parts else ""
                 ts = parts[1] if len(parts) > 1 else "0"
@@ -775,19 +776,18 @@ def main():
 
             elif user_input.lower() in ("agent list", "agents"):
                 from agent import list_agents
+
                 agents = list_agents()
                 if not agents:
                     print("  No agents running.")
                 else:
                     for a in agents:
                         ok = a.get("successful_steps", 0)
-                        print(
-                            f"  [{a['id']}] {a['status']} — {a['goal'][:60]}"
-                            f" ({a['step_count']} steps, {ok} ok)"
-                        )
+                        print(f"  [{a['id']}] {a['status']} — {a['goal'][:60]} ({a['step_count']} steps, {ok} ok)")
 
             elif user_input.lower().startswith("agent stop "):
                 from agent import stop_agent
+
                 aid = user_input.split(None, 2)[-1]
                 if stop_agent(aid):
                     print(f"  Stopped agent {aid}")
@@ -796,10 +796,12 @@ def main():
 
             elif user_input.lower() in ("graph stats", "graph summary"):
                 from graph_memory import get_graph_summary
+
                 print(f"  {get_graph_summary()}")
 
             elif user_input.lower().startswith("graph extract "):
                 from graph_memory import extract_entities_relations
+
                 text = user_input.split(None, 2)[-1]
                 results = extract_entities_relations(text)
                 print(f"  Extracted {len(results)} relationship(s)")
@@ -808,6 +810,7 @@ def main():
 
             elif user_input.lower().startswith("graph neighbors "):
                 from graph_memory import query_relationships, search_neighbors
+
                 entity = user_input.split(None, 2)[-1]
                 print(f"  {query_relationships(entity)}")
                 neighbors = search_neighbors(entity)
@@ -816,6 +819,7 @@ def main():
 
             elif user_input.lower().startswith("graph search "):
                 from graph_memory import hybrid_graph_search
+
                 query = user_input.split(None, 2)[-1]
                 results = hybrid_graph_search(query)
                 if results:
@@ -842,6 +846,7 @@ def main():
             elif user_input.lower() in ("/context", "context"):
                 try:
                     from brain import get_conversation_context
+
                     ctx = get_conversation_context()
                     print(f"  State: {ctx['state']}")
                     print(f"  Problem: {ctx['last_problem'][:80] if ctx.get('last_problem') else 'none'}")
@@ -882,9 +887,7 @@ def main():
             elif user_input.lower().startswith("/mode") or user_input.lower().startswith("/m "):
                 parts = user_input.split()
                 mode_name = parts[-1].lower() if len(parts) > 1 else ""
-                mode_map = {"text": InputMode.TEXT, "t": InputMode.TEXT,
-                            "paste": InputMode.PASTE, "p": InputMode.PASTE,
-                            "queue": InputMode.QUEUE, "q": InputMode.QUEUE}
+                mode_map = {"text": InputMode.TEXT, "t": InputMode.TEXT, "paste": InputMode.PASTE, "p": InputMode.PASTE, "queue": InputMode.QUEUE, "q": InputMode.QUEUE}
                 if mode_name in mode_map:
                     _current_mode = mode_map[mode_name]
                     _paste_buffer = []

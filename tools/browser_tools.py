@@ -29,9 +29,7 @@ def browser_navigate(url: str, browser: str = DEFAULT_BROWSER):
     if browser == "Safari":
         script = f'tell application "Safari" to set URL of current tab of front window to "{safe_url}"'
     else:
-        script = (
-            f'tell application "{browser}"\ntell front window to tell active tab to set URL to "{safe_url}"\nend tell'
-        )
+        script = f'tell application "{browser}"\ntell front window to tell active tab to set URL to "{safe_url}"\nend tell'
     _applescript(script)
     return f"Navigating to {url}."
 
@@ -53,22 +51,14 @@ end tell'''
 
 def browser_new_tab(browser: str = DEFAULT_BROWSER):
     _activate_browser(browser)
-    script = (
-        'tell application "Safari" to make new tab at end of tabs of front window'
-        if browser == "Safari"
-        else f'tell application "{browser}" to tell front window to make new tab'
-    )
+    script = 'tell application "Safari" to make new tab at end of tabs of front window' if browser == "Safari" else f'tell application "{browser}" to tell front window to make new tab'
     _applescript(script)
     return "Opened new tab."
 
 
 def browser_close_tab(browser: str = DEFAULT_BROWSER):
     _activate_browser(browser)
-    script = (
-        'tell application "Safari" to close current tab of front window'
-        if browser == "Safari"
-        else f'tell application "{browser}" to tell front window to close active tab'
-    )
+    script = 'tell application "Safari" to close current tab of front window' if browser == "Safari" else f'tell application "{browser}" to tell front window to close active tab'
     _applescript(script)
     return "Closed tab."
 
@@ -100,11 +90,7 @@ def browser_reload(browser: str = DEFAULT_BROWSER):
 
 
 def browser_current_url(browser: str = DEFAULT_BROWSER):
-    script = (
-        'tell application "Safari" to return URL of current tab of front window'
-        if browser == "Safari"
-        else f'tell application "{browser}" to return URL of active tab of front window'
-    )
+    script = 'tell application "Safari" to return URL of current tab of front window' if browser == "Safari" else f'tell application "{browser}" to return URL of active tab of front window'
     out, _ = _applescript(script)
     return f"You're on: {out}" if out else "Couldn't read URL."
 
@@ -165,19 +151,23 @@ def _duckduckgo_search(query: str) -> str:
                 headers={"User-Agent": "Mozilla/5.0"},
             )
             from html.parser import HTMLParser
+
             class _LinkParser(HTMLParser):
                 def __init__(self):
                     super().__init__()
                     self.results = []
                     self._capture = False
+
                 def handle_starttag(self, tag, attrs):
                     attrs_dict = dict(attrs)
                     if tag == "a" and "result__a" in attrs_dict.get("class", ""):
                         self._capture = True
+
                 def handle_data(self, data):
                     if self._capture:
                         self.results.append(data.strip())
                         self._capture = False
+
             parser = _LinkParser()
             parser.feed(html_resp.text)
             parts = parser.results[:5] if parser.results else ["Could not search: no results"]

@@ -5,10 +5,12 @@ import pytest
 class TestStartup:
     def test_terminal_imports(self):
         import terminal
+
         assert terminal
 
     def test_server_imports(self):
         import server
+
         assert server
 
     def test_brain_initializes(self, api):

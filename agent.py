@@ -16,8 +16,8 @@ _BYPASS_PATTERNS = re.compile(
     r"\bjust go ahead\b"
 )
 _PII_PATTERNS = re.compile(
-    r"\b\d{13,19}\b"                         # credit card / long numbers
-    r"|\b\d{3}-\d{2}-\d{4}\b"               # SSN
+    r"\b\d{13,19}\b"  # credit card / long numbers
+    r"|\b\d{3}-\d{2}-\d{4}\b"  # SSN
     r"|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"  # email
 )
 
@@ -26,6 +26,7 @@ def _sanitize_goal(goal: str) -> str:
     goal = _BYPASS_PATTERNS.sub("[redacted]", goal)
     goal = _PII_PATTERNS.sub("[redacted]", goal)
     return goal
+
 
 AGENT_TRIGGERS = [
     "discord",
@@ -60,14 +61,25 @@ AGENT_TRIGGERS = [
 ]
 
 PLANNER_TRIGGERS = [
-    "complex", "multi-step", "research", "investigate", "compare",
-    "find and", "gather", "collect", "organize", "prepare a report",
-    "comprehensive", "thorough", "plan",
+    "complex",
+    "multi-step",
+    "research",
+    "investigate",
+    "compare",
+    "find and",
+    "gather",
+    "collect",
+    "organize",
+    "prepare a report",
+    "comprehensive",
+    "thorough",
+    "plan",
 ]
 
 MAX_STEPS = 30
 
 # ── Think → Act → Evaluate: Plan dataclasses ──
+
 
 @dataclass
 class PlanStep:
@@ -78,6 +90,7 @@ class PlanStep:
     status: str = "pending"
     result: str = ""
     evaluation: str = ""
+
 
 @dataclass
 class Plan:
@@ -130,16 +143,16 @@ def _create_plan(goal: str, ask_llm_fn) -> Plan | None:
         "Each step should use exactly one tool. Respond ONLY with a JSON array of steps.\n\n"
         f"Goal: {goal}\n\n"
         "Format:\n"
-        '[\n'
+        "[\n"
         '  {"step_id": "1", "goal": "what to accomplish", "tool_hint": "suggested_tool_name",\n'
         '   "args": {"query": "search term", "app_name": "Safari"}},\n'
-        '  ...\n'
+        "  ...\n"
         "]\n"
         "Rules:\n"
         "- Each step must be achievable with a single tool call\n"
         "- tool_hint must match a known tool name (browser_navigate, web_search, open_app, etc.)\n"
         "- Each step MUST include an 'args' object with ALL required parameters for that tool\n"
-        "- Example: web_search needs args={\"query\": \"...\"}, open_app needs args={\"app_name\": \"...\"}\n"
+        '- Example: web_search needs args={"query": "..."}, open_app needs args={"app_name": "..."}\n'
         "- Return NOTHING but the JSON array\n"
     )
     try:
@@ -179,15 +192,8 @@ def _evaluate_step(step: PlanStep, ask_llm_fn) -> str:
 
 def _generate_final_answer(plan: Plan, ask_llm_fn) -> str:
     """Synthesize a final answer from all completed steps."""
-    steps_text = "\n".join(
-        f"Step {s.step_id}: {s.goal} → {s.evaluation}\n  Result: {s.result[:200]}"
-        for s in plan.steps if s.result
-    )
-    prompt = (
-        "Summarize what was accomplished based on these step results.\n"
-        f"Original goal: {plan.original_goal}\n\n{steps_text}\n\n"
-        "Provide a concise summary of what was done and key findings."
-    )
+    steps_text = "\n".join(f"Step {s.step_id}: {s.goal} → {s.evaluation}\n  Result: {s.result[:200]}" for s in plan.steps if s.result)
+    prompt = f"Summarize what was accomplished based on these step results.\nOriginal goal: {plan.original_goal}\n\n{steps_text}\n\nProvide a concise summary of what was done and key findings."
     try:
         return ask_llm_fn(prompt) or "Completed."
     except Exception:
@@ -238,7 +244,7 @@ def run_planner_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None) -> s
             retry_prompt = (
                 f"Step '{step.goal}' failed. Result: {step.result[:300]}\n"
                 "Suggest an alternative approach or tool to accomplish this goal. "
-                f"Respond with: {{\"tool\": \"tool_name\", \"args\": {{\"param\": \"value\"}}, \"reason\": \"why\"}}\n"
+                f'Respond with: {{"tool": "tool_name", "args": {{"param": "value"}}, "reason": "why"}}\n'
                 "Include ALL required arguments for the tool in the args field."
             )
             try:
@@ -277,19 +283,70 @@ def run_planner_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None) -> s
 
 # Agent success detection — scored terms
 SUCCESS_TERMS = {
-    "opened", "sent", "completed", "created", "started", "playing", "navigated",
-    "remembered", "saved", "quit", "closed", "delivered", "found", "results",
-    "added", "marked", "done", "success", "launched", "focused", "loaded",
-    "navigating", "posted", "resumed", "skipped", "next", "timer set",
-    "countdown", "goal added", "stored", "written", "edited", "updated",
-    "modified", "exit code 0", "temperature", "humidity", "wind", "cpu",
-    "ram", "disk", "percent", "killed",
+    "opened",
+    "sent",
+    "completed",
+    "created",
+    "started",
+    "playing",
+    "navigated",
+    "remembered",
+    "saved",
+    "quit",
+    "closed",
+    "delivered",
+    "found",
+    "results",
+    "added",
+    "marked",
+    "done",
+    "success",
+    "launched",
+    "focused",
+    "loaded",
+    "navigating",
+    "posted",
+    "resumed",
+    "skipped",
+    "next",
+    "timer set",
+    "countdown",
+    "goal added",
+    "stored",
+    "written",
+    "edited",
+    "updated",
+    "modified",
+    "exit code 0",
+    "temperature",
+    "humidity",
+    "wind",
+    "cpu",
+    "ram",
+    "disk",
+    "percent",
+    "killed",
 }
 FAILURE_TERMS = {
-    "error", "failed", "could not", "timeout", "exception", "denied",
-    "not found", "permission", "unavailable", "invalid", "missing",
-    "traceback", "cannot", "unable", "refused", "aborted", "no such",
+    "error",
+    "failed",
+    "could not",
+    "timeout",
+    "exception",
+    "denied",
+    "not found",
+    "permission",
+    "unavailable",
+    "invalid",
+    "missing",
+    "traceback",
+    "cannot",
+    "unable",
+    "refused",
+    "aborted",
+    "no such",
 }
+
 
 def _is_success_result(tool_name: str, result: str) -> bool:
     """Score-based success detection. Primary = positive terms; fallback = non-empty without failure."""
@@ -301,6 +358,7 @@ def _is_success_result(tool_name: str, result: str) -> bool:
         return pos_score > neg_score
     # Fallback: non-empty result is likely success
     return bool(r.strip())
+
 
 _agent_store: dict[str, dict] = {}
 _store_lock = threading.Lock()
@@ -324,10 +382,8 @@ class Agent:
     def checkpoint(self):
         try:
             from procedural_memory import save_procedure
-            summary = "; ".join(
-                f"{s['tool']}:{'ok' if s['success'] else 'fail'}"
-                for s in self.steps[-5:]
-            )
+
+            summary = "; ".join(f"{s['tool']}:{'ok' if s['success'] else 'fail'}" for s in self.steps[-5:])
             save_procedure(
                 trigger=f"agent_{self.id}",
                 steps=[s["tool"] for s in self.steps if s.get("tool")],
@@ -403,15 +459,10 @@ def _parse_decision(raw: str) -> dict:
 
 def _build_prompt(goal: str, steps: list, last_result: str, already_called: set = None) -> str:
     recent = steps[-5:]
-    recent_text = "\n".join(
-        f"{i + 1}. tool={step.get('tool')} success={step.get('success')} result={step.get('result', '')[:200]}"
-        for i, step in enumerate(recent)
-    )
+    recent_text = "\n".join(f"{i + 1}. tool={step.get('tool')} success={step.get('success')} result={step.get('result', '')[:200]}" for i, step in enumerate(recent))
     already_text = ""
     if already_called:
-        already_text = "\nAlready executed this turn — do NOT repeat:\n" + "\n".join(
-            f"  - {t}({a})" for t, a in sorted(already_called)
-        )
+        already_text = "\nAlready executed this turn — do NOT repeat:\n" + "\n".join(f"  - {t}({a})" for t, a in sorted(already_called))
     return (
         "You are Jarvis running an autonomous agent loop. "
         "Respond ONLY with a single JSON object — no explanation, no backticks.\n"
@@ -494,31 +545,43 @@ def run_agent_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None, max_it
             args = {}
 
         if not tool_name:
-            agent.steps.append({
-                "tool": "",
-                "args": args,
-                "success": False,
-                "result": "No tool selected.",
-                "thought": decision.get("thought", ""),
-            })
+            agent.steps.append(
+                {
+                    "tool": "",
+                    "args": args,
+                    "success": False,
+                    "result": "No tool selected.",
+                    "thought": decision.get("thought", ""),
+                }
+            )
             agent.last_result = "No tool selected."
             continue
 
         arg_key = _canonical_args_key(args)
         if (tool_name, arg_key) in agent.already_called:
             agent.last_result = f"Skipped {tool_name}: already called with these args."
-            agent.steps.append({
-                "tool": tool_name, "args": args, "success": False,
-                "result": agent.last_result, "thought": decision.get("thought", ""),
-            })
+            agent.steps.append(
+                {
+                    "tool": tool_name,
+                    "args": args,
+                    "success": False,
+                    "result": agent.last_result,
+                    "thought": decision.get("thought", ""),
+                }
+            )
             continue
 
         if agent.fail_counts.get(tool_name, 0) >= 2:
             agent.last_result = f"Skipped {tool_name}: failed too many times."
-            agent.steps.append({
-                "tool": tool_name, "args": args, "success": False,
-                "result": agent.last_result, "thought": decision.get("thought", ""),
-            })
+            agent.steps.append(
+                {
+                    "tool": tool_name,
+                    "args": args,
+                    "success": False,
+                    "result": agent.last_result,
+                    "thought": decision.get("thought", ""),
+                }
+            )
             continue
 
         # Rapid-repeat prevention — skip if same tool used ≥2 times in last 3 steps
@@ -527,10 +590,15 @@ def run_agent_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None, max_it
             last_tools = [s.get("tool") for s in agent.steps[-3:] if s.get("tool")]
             if last_tools.count(tool_name) >= 2:
                 agent.last_result = f"Skipped {tool_name}: used {last_tools.count(tool_name)}x in last 3 steps."
-                agent.steps.append({
-                    "tool": tool_name, "args": args, "success": False,
-                    "result": agent.last_result, "thought": decision.get("thought", ""),
-                })
+                agent.steps.append(
+                    {
+                        "tool": tool_name,
+                        "args": args,
+                        "success": False,
+                        "result": agent.last_result,
+                        "thought": decision.get("thought", ""),
+                    }
+                )
                 continue
 
         print(f"[AGENT] Step {step_num}: {tool_name}({args})")
@@ -548,10 +616,15 @@ def run_agent_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None, max_it
             agent.last_result = f"Tool execution error: {e}"
 
         agent.already_called.add((tool_name, arg_key))
-        agent.steps.append({
-            "tool": tool_name, "args": args, "success": success,
-            "result": agent.last_result, "thought": decision.get("thought", ""),
-        })
+        agent.steps.append(
+            {
+                "tool": tool_name,
+                "args": args,
+                "success": success,
+                "result": agent.last_result,
+                "thought": decision.get("thought", ""),
+            }
+        )
 
         if step_num % 5 == 0:
             agent.checkpoint()
@@ -583,10 +656,7 @@ def _list_agents_tool() -> str:
         return "No sub-agents currently running."
     lines = [f"{len(agents)} sub-agent(s):"]
     for a in agents:
-        lines.append(
-            f"  [{a['id']}] {a['goal'][:80]} — {a['status']} "
-            f"({a['successful_steps']}/{a['step_count']} steps ok)"
-        )
+        lines.append(f"  [{a['id']}] {a['goal'][:80]} — {a['status']} ({a['successful_steps']}/{a['step_count']} steps ok)")
     return "\n".join(lines)
 
 
@@ -612,25 +682,42 @@ def _get_agent_status_tool(agent_id: str) -> str:
 
 
 AGENT_DEFINITIONS = [
-    {"type": "function", "function": {
-        "name": "agent_spawn",
-        "description": "Launch a sub-agent for a multi-step goal. The agent runs autonomously and returns a summary.",
-        "parameters": {"type": "object", "properties": {
-            "goal": {"type": "string", "description": "The goal or task for the sub-agent to complete"},
-        }, "required": ["goal"]},
-    }},
-    {"type": "function", "function": {
-        "name": "list_agents",
-        "description": "List all sub-agents with IDs, goals, and status. Use this before calling get_agent_status.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    }},
-    {"type": "function", "function": {
-        "name": "get_agent_status",
-        "description": "Get detailed status of a sub-agent by ID. Returns goal, steps, tools, errors, final answer.",
-        "parameters": {"type": "object", "properties": {
-            "agent_id": {"type": "string", "description": "The 8-character hex agent ID (e.g. 'a1b2c3d4')"},
-        }, "required": ["agent_id"]},
-    }},
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_spawn",
+            "description": "Launch a sub-agent for a multi-step goal. The agent runs autonomously and returns a summary.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "description": "The goal or task for the sub-agent to complete"},
+                },
+                "required": ["goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_agents",
+            "description": "List all sub-agents with IDs, goals, and status. Use this before calling get_agent_status.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_status",
+            "description": "Get detailed status of a sub-agent by ID. Returns goal, steps, tools, errors, final answer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "description": "The 8-character hex agent ID (e.g. 'a1b2c3d4')"},
+                },
+                "required": ["agent_id"],
+            },
+        },
+    },
 ]
 
 AGENT_TOOLS = {

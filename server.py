@@ -99,6 +99,7 @@ async def health():
 @app.get("/health/providers")
 async def health_providers():
     from brain import get_provider_health
+
     return get_provider_health()
 
 
@@ -320,9 +321,7 @@ async def audit_endpoint():
     from safety import get_audit_log
 
     logs = get_audit_log(50)
-    return {
-        "logs": [{"tool": row[0], "args": row[1], "level": row[2], "decision": row[3], "time": row[4]} for row in logs]
-    }
+    return {"logs": [{"tool": row[0], "args": row[1], "level": row[2], "decision": row[3], "time": row[4]} for row in logs]}
 
 
 @app.get("/priorities")
@@ -330,12 +329,7 @@ async def priorities_endpoint():
     from priority import get_priority_stats
 
     stats = get_priority_stats()
-    return {
-        "priorities": [
-            {"type": s[0], "base": s[1], "current": round(s[2], 2), "ignored": s[3], "acknowledged": s[4]}
-            for s in stats
-        ]
-    }
+    return {"priorities": [{"type": s[0], "base": s[1], "current": round(s[2], 2), "ignored": s[3], "acknowledged": s[4]} for s in stats]}
 
 
 @app.get("/notices")
@@ -617,8 +611,6 @@ async def eval_run(no_api: bool = False):
 
     report = run_eval_suite(require_no_api=no_api)
     return report
-
-
 
 
 @app.get("/graph/stats")
@@ -1576,23 +1568,23 @@ async def unlock_face(photo: UploadFile = File(None)):
             "authenticated": False,
             "confidence": 0.0,
             "reason": "No face detected in capture.",
-    # Docs
-    "docs_get": {"confirm": False},
-    "docs_create": {"confirm": True},
-    "docs_append_text": {"confirm": True},
-    "docs_search": {"confirm": False},
-    # Slides
-    "slides_get": {"confirm": False},
-    "slides_create": {"confirm": True},
-    "slides_add_slide": {"confirm": True},
-    "slides_replace_text": {"confirm": True},
-    "slides_search": {"confirm": False},
-    # Forms
-    "forms_get": {"confirm": False},
-    "forms_create": {"confirm": True},
-    "forms_add_question": {"confirm": True},
-    "forms_get_responses": {"confirm": False},
-}
+            # Docs
+            "docs_get": {"confirm": False},
+            "docs_create": {"confirm": True},
+            "docs_append_text": {"confirm": True},
+            "docs_search": {"confirm": False},
+            # Slides
+            "slides_get": {"confirm": False},
+            "slides_create": {"confirm": True},
+            "slides_add_slide": {"confirm": True},
+            "slides_replace_text": {"confirm": True},
+            "slides_search": {"confirm": False},
+            # Forms
+            "forms_get": {"confirm": False},
+            "forms_create": {"confirm": True},
+            "forms_add_question": {"confirm": True},
+            "forms_get_responses": {"confirm": False},
+        }
 
     similarity = _compare_embeddings(embedding, stored_embedding)
     authenticated = similarity >= FACE_SIMILARITY_THRESHOLD

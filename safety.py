@@ -498,9 +498,7 @@ def check_permission(tool: str, args: dict = None) -> bool:
             log_audit(tool, args, level, "ALLOWED", "session confirmed")
             return True
         log_audit(tool, args, level, "NEEDS_CONFIRMATION")
-        raise NeedsConfirmation(
-            tool, args, level, f"I need your permission to {tool.replace('_', ' ')}. Shall I go ahead?"
-        )
+        raise NeedsConfirmation(tool, args, level, f"I need your permission to {tool.replace('_', ' ')}. Shall I go ahead?")
 
     if level == DANGEROUS:
         log_audit(tool, args, level, "NEEDS_CONFIRMATION")

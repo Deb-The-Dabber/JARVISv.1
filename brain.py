@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 
 import learner
 from agent import needs_agent_loop, needs_planner, run_agent_loop, run_planner_loop
-
 from config import (
     GEMINI_DAILY_LIMIT,
     MODEL_CONTEXT_LIMITS,
@@ -88,9 +87,7 @@ _provider_backoff_until = {}
 _provider_consecutive_failures = {}
 _provider_usage_count = {}
 _provider_health_scores = {}
-_provider_health: dict[
-    str, dict
-] = {}  # {name: {total, successes, failures, avg_latency, last_success, last_failure, circuit_open, health_score}}
+_provider_health: dict[str, dict] = {}  # {name: {total, successes, failures, avg_latency, last_success, last_failure, circuit_open, health_score}}
 _nemotron_usage_count = 0
 _tool_call_names: list[str] = []
 _turn_memo_cache: dict[str, str] = {}
@@ -702,9 +699,7 @@ def get_runtime_status() -> dict:
         "model_preferred": NEMOTRON_ULTRA_MODEL,
         "model_fallback": GROQ_MODEL,
         "model_last_used": _last_model_used,
-        "api_key_configured": any(
-            [NVIDIA_NEMOTRON_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY]
-        ),
+        "api_key_configured": any([NVIDIA_NEMOTRON_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY]),
         "nemotron_usage": _nemotron_usage_count,
         "gemini_usage": _get_gemini_usage_count(),
         "providers": {
@@ -840,7 +835,8 @@ def init():
     warm_up_providers()
     # Phase 1.2: Pre-warm MiniLM embedding model in background
     import threading as _t
-    _t.Thread(target=lambda: __import__('vector_memory').prewarm_minilm(), daemon=True).start()
+
+    _t.Thread(target=lambda: __import__("vector_memory").prewarm_minilm(), daemon=True).start()
     _load_plugins()
     print(f"  Brain initialized. Nemotron requests: {_nemotron_usage_count}")
 
@@ -865,9 +861,7 @@ def warm_up_providers():
     def _warm_groq():
         try:
             _debug("[Warm-up] Warming Groq...")
-            requests.get(
-                "https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, timeout=5
-            )
+            requests.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, timeout=5)
             _debug("[Warm-up] Groq warm")
         except Exception:
             pass
@@ -919,10 +913,7 @@ def _load_plugins():
 def build_system_prompt(query: str = ""):
     now = datetime.datetime.now().strftime("%A, %B %d %Y, %I:%M %p")
     device_block = (
-        f"\n- Model: {SYSTEM_INFO.get('model', 'Unknown')}"
-        f"\n- Chip: {SYSTEM_INFO.get('chip', 'Unknown')}"
-        f"\n- RAM: {SYSTEM_INFO.get('ram', 'Unknown')}"
-        f"\n- OS: {SYSTEM_INFO.get('os', 'Unknown')}"
+        f"\n- Model: {SYSTEM_INFO.get('model', 'Unknown')}\n- Chip: {SYSTEM_INFO.get('chip', 'Unknown')}\n- RAM: {SYSTEM_INFO.get('ram', 'Unknown')}\n- OS: {SYSTEM_INFO.get('os', 'Unknown')}"
     )
     memory_block = build_memory_block()
     learned_str = ", ".join(_learned_tools.keys()) if _learned_tools else "none yet"
@@ -981,15 +972,8 @@ Learned capabilities: {learned_str}"""
 def _tool_loop_exhausted(tool_results: list[str] | None = None) -> str:
     if tool_results:
         tail = "; ".join(tool_results[-4:])
-        return (
-            f"I hit my step limit but completed several actions: {tail[:450]}. "
-            "Say continue to resume. For Discord, use discord_open_and_send after you're logged in."
-        )
-    return (
-        "I ran into an issue — likely too many tool steps. "
-        "For Discord in Safari, try: open Safari, log into discord.com, then ask me to "
-        "open a channel and send a message."
-    )
+        return f"I hit my step limit but completed several actions: {tail[:450]}. Say continue to resume. For Discord, use discord_open_and_send after you're logged in."
+    return "I ran into an issue — likely too many tool steps. For Discord in Safari, try: open Safari, log into discord.com, then ask me to open a channel and send a message."
 
 
 def _is_tool_use_failed(exc: Exception) -> bool:
@@ -1076,11 +1060,7 @@ def _prefetch_tools_for_message(user_message: str) -> list[str]:
     wants_search = any(re.search(p, t) for p in search_patterns)
     if not wants_search and re.search(r"\bhow (?:to|do i|can i)\b", t):
         wants_search = True
-    if (
-        not wants_search
-        and re.search(r"\bfigure out\b", t)
-        and re.search(r"\b(?:instagram|insta|discord|tiktok|snapchat)\b", t)
-    ):
+    if not wants_search and re.search(r"\bfigure out\b", t) and re.search(r"\b(?:instagram|insta|discord|tiktok|snapchat)\b", t):
         wants_search = True
 
     # Only call get_weather_detailed for current local weather (not research)
@@ -1171,9 +1151,7 @@ def ask_nemotron_ultra(user_message: str, tool_results: list[str]) -> str:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [
-                    {"id": tc_id, "type": "function", "function": {"name": fn_name, "arguments": json.dumps(fn_args)}}
-                ],
+                "tool_calls": [{"id": tc_id, "type": "function", "function": {"name": fn_name, "arguments": json.dumps(fn_args)}}],
             }
         )
         messages.append({"role": "tool", "tool_call_id": tc_id, "content": result_str})
@@ -1337,9 +1315,7 @@ def ask_nemotron_ultra(user_message: str, tool_results: list[str]) -> str:
         return _sanitize_assistant_text(content)
 
     # ── Diagnostic: dump the last model response to understand why tool_choice="none" was ignored ──
-    last_assistant_msg = next(
-        (m for m in reversed(messages) if m.get("role") == "assistant"), None
-    )
+    last_assistant_msg = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
     _debug("[Nemotron Ultra] === LOOP EXHAUSTED DIAGNOSTIC ===")
     _debug(f"[Nemotron Ultra] Total iterations: {_nemotron_loop_count}")
     _debug("[Nemotron Ultra] tool_choice was 'none' on last iter, tools=[]")
@@ -1350,7 +1326,7 @@ def ask_nemotron_ultra(user_message: str, tool_results: list[str]) -> str:
             _debug(f"[Nemotron Ultra] Last assistant tool_calls count: {len(tc)}")
             for i, t in enumerate(tc):
                 fn = getattr(t, "function", None) or {}
-                args = getattr(fn, 'arguments', '?')
+                args = getattr(fn, "arguments", "?")
                 _debug(f"[Nemotron Ultra]   tool_call[{i}]: {getattr(fn, 'name', '?')}({args})")
         else:
             _debug("[Nemotron Ultra] No structured tool_calls in last assistant message")
@@ -1424,11 +1400,7 @@ def _sanitize_tool_args(fn, raw_args):
         return {}
     if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
         return raw_args
-    allowed = {
-        name
-        for name, p in params.items()
-        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-    }
+    allowed = {name for name, p in params.items() if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)}
     return {k: v for k, v in raw_args.items() if k in allowed}
 
 
@@ -1487,12 +1459,7 @@ def _execute_tool_by_name(step: str) -> str:
         if fn:
             try:
                 sig = inspect.signature(fn)
-                required = [
-                    name
-                    for name, p in sig.parameters.items()
-                    if p.default is inspect._empty
-                    and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-                ]
+                required = [name for name, p in sig.parameters.items() if p.default is inspect._empty and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)]
                 if len(required) == 1:
                     args[required[0]] = remainder
             except Exception:
@@ -1648,9 +1615,7 @@ def _ask_gemini_with_model(user_message: str, model_name: str) -> str:
                     if has_pending_safe():
                         return result
                     tool_results.append(f"{fn_name}: {result}")
-                    tool_result_parts.append(
-                        types.Part(function_response=types.FunctionResponse(name=fn_name, response={"result": result}))
-                    )
+                    tool_result_parts.append(types.Part(function_response=types.FunctionResponse(name=fn_name, response={"result": result})))
                 contents.append(types.Content(role="tool", parts=tool_result_parts))
                 continue
             return text
@@ -1666,9 +1631,7 @@ def _ask_gemini_with_model(user_message: str, model_name: str) -> str:
             _debug(f"[Gemini] Result: {str(result)[:100]}")
             if has_pending_safe():
                 return result
-            tool_result_parts.append(
-                types.Part(function_response=types.FunctionResponse(name=fn_name, response={"result": result}))
-            )
+            tool_result_parts.append(types.Part(function_response=types.FunctionResponse(name=fn_name, response={"result": result})))
 
         contents.append(types.Content(role="tool", parts=tool_result_parts))
 
@@ -1713,11 +1676,7 @@ def ask_gemini_tools_only(user_message: str) -> list[str]:
             config=config,
         )
         candidate = response.candidates[0]
-        tool_calls = [
-            part.function_call
-            for part in (candidate.content.parts or [])
-            if hasattr(part, "function_call") and part.function_call
-        ]
+        tool_calls = [part.function_call for part in (candidate.content.parts or []) if hasattr(part, "function_call") and part.function_call]
         if not tool_calls:
             break
 
@@ -1730,9 +1689,7 @@ def ask_gemini_tools_only(user_message: str) -> list[str]:
             result = _execute_tool(fn_name, fn_args)
             _debug(f"[Gemini tools] Result: {str(result)[:100]}")
             results.append(f"{fn_name}: {result}")
-            tool_result_parts.append(
-                types.Part(function_response=types.FunctionResponse(name=fn_name, response={"result": result}))
-            )
+            tool_result_parts.append(types.Part(function_response=types.FunctionResponse(name=fn_name, response={"result": result})))
         contents.append(types.Content(role="tool", parts=tool_result_parts))
 
     return results
@@ -1807,11 +1764,7 @@ def _provider_messages(user_message: str, tool_results: list[str]):
         system_prompt += "\n\nAnswer the user directly from your knowledge. Do NOT mention calling tools, running commands, or checking anything. Just respond naturally and helpfully."
 
     messages = [{"role": "system", "content": system_prompt}]
-    clean_memory = [
-        m
-        for m in get_working_memory(user_message)
-        if m.get("role") in ("user", "assistant", "system") and m.get("content")
-    ]
+    clean_memory = [m for m in get_working_memory(user_message) if m.get("role") in ("user", "assistant", "system") and m.get("content")]
     clean_memory = sanitize_messages_for_fallback(clean_memory)
     messages.extend(clean_memory)
     messages.append({"role": "user", "content": user_message})
@@ -2120,19 +2073,13 @@ web_search REQUIRES a "query" argument — never call it empty."""
     system_prompt = base + nim_rules
 
     messages = [{"role": "system", "content": system_prompt}]
-    clean_memory = [
-        m
-        for m in get_working_memory(user_message)
-        if m.get("role") in ("user", "assistant", "system") and m.get("content")
-    ]
+    clean_memory = [m for m in get_working_memory(user_message) if m.get("role") in ("user", "assistant", "system") and m.get("content")]
     messages.extend(clean_memory)
     messages.append({"role": "user", "content": user_message})
     return messages
 
 
-def ask_nim_with_context(user_message: str, tool_results: list[str],
-                         models: list[str] | None = None,
-                         provider_name: str = "NVIDIA NIM") -> str:
+def ask_nim_with_context(user_message: str, tool_results: list[str], models: list[str] | None = None, provider_name: str = "NVIDIA NIM") -> str:
     if not NVIDIA_NEMOTRON_API_KEY:
         raise Exception("NVIDIA NIM API key not configured")
 
@@ -2157,8 +2104,7 @@ def ask_nim_with_context(user_message: str, tool_results: list[str],
     raise last_exc
 
 
-def _ask_nim_loop(client, messages: list, model: str,
-                  provider_name: str = "NVIDIA NIM") -> str:
+def _ask_nim_loop(client, messages: list, model: str, provider_name: str = "NVIDIA NIM") -> str:
     """Inner loop for a single NIM model — tries up to 4 iterations."""
     for _ in range(4):
         kwargs = {
@@ -2281,9 +2227,7 @@ def _ask_nim_loop(client, messages: list, model: str,
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [
-                    {"id": tc_id, "type": "function", "function": {"name": name, "arguments": json.dumps(fn_args)}}
-                ],
+                "tool_calls": [{"id": tc_id, "type": "function", "function": {"name": name, "arguments": json.dumps(fn_args)}}],
             }
         )
         messages.append({"role": "tool", "tool_call_id": tc_id, "content": str(result)})
@@ -2452,9 +2396,7 @@ Always prefer real tool results over assumptions."""
             results.append(f"{fn_name}: {result}")
             if has_pending_safe():
                 return results, result
-            tool_result_parts.append(
-                types.Part(function_response=types.FunctionResponse(name=fn_name, response={"result": result}))
-            )
+            tool_result_parts.append(types.Part(function_response=types.FunctionResponse(name=fn_name, response={"result": result})))
         contents.append(types.Content(role="tool", parts=tool_result_parts))
     else:
         if results and not direct_answer:
@@ -2562,9 +2504,7 @@ def ask_with_tools(user_message: str) -> str:
             break
     combined_results = truncated
     if combined_results:
-        _debug(
-            f"Passing {len(combined_results)} tool results to fallbacks ({len(_accumulated_tool_results)} from primary + {len(prefetched)} prefetched, truncated to ~{char_count // 4}t)"
-        )
+        _debug(f"Passing {len(combined_results)} tool results to fallbacks ({len(_accumulated_tool_results)} from primary + {len(prefetched)} prefetched, truncated to ~{char_count // 4}t)")
     else:
         _debug("No accumulated tool results from primary provider")
 
@@ -2732,11 +2672,7 @@ def _summarize_with_gemini(history: str) -> str:
     This helper is only used for background memory summarization and should
     not consume Gemini quota aggressively when the key is precious.
     """
-    if (
-        not _gemini_available()
-        or datetime.datetime.now().timestamp() < _gemini_backoff_until
-        or _get_gemini_usage_count() >= GEMINI_DAILY_LIMIT - 2
-    ):
+    if not _gemini_available() or datetime.datetime.now().timestamp() < _gemini_backoff_until or _get_gemini_usage_count() >= GEMINI_DAILY_LIMIT - 2:
         return ""
     client = _get_client()
     if not client:
@@ -2949,9 +2885,7 @@ def process(text):
     # Self-reflection: log pre-processing state
     if DEBUG:
         _pre_reflect = conversation_context.snapshot()
-        _debug(
-            f"[Reflect] PRE  state={_pre_reflect['state']} last_problem={'yes' if _pre_reflect['last_problem'] else 'no'}"
-        )
+        _debug(f"[Reflect] PRE  state={_pre_reflect['state']} last_problem={'yes' if _pre_reflect['last_problem'] else 'no'}")
 
     # Capability/gap analysis — inject inspect_capabilities result directly
     _capability_gap_patterns = [
@@ -2969,10 +2903,7 @@ def process(text):
             capabilities = _execute_tool("inspect_capabilities", {})
             conversation_context.add_message(
                 "system",
-                (
-                    f"[Capability context from inspect_capabilities()]:\n{capabilities}\n\n"
-                    f"Use this data to answer the user's query. Do NOT call inspect_capabilities again."
-                ),
+                (f"[Capability context from inspect_capabilities()]:\n{capabilities}\n\nUse this data to answer the user's query. Do NOT call inspect_capabilities again."),
             )
             _debug(f"[Router] inspect_capabilities injected ({len(capabilities)} chars)")
         except Exception as e:
@@ -3081,9 +3012,7 @@ def process(text):
             conversation_context.state = ConversationState.AWAITING_CONFIRM
         if DEBUG:
             _post_reflect = conversation_context.snapshot()
-            _debug(
-                f"[Reflect] POST state={_post_reflect['state']} tools={_post_reflect['last_tools']} elapsed={_ctx_elapsed:.2f}s"
-            )
+            _debug(f"[Reflect] POST state={_post_reflect['state']} tools={_post_reflect['last_tools']} elapsed={_ctx_elapsed:.2f}s")
     except Exception as _ctx_err:
         _debug(f"[Context] Update error: {_ctx_err}")
 

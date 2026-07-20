@@ -4,11 +4,11 @@ import subprocess
 
 HOME = os.path.expanduser("~")
 
+
 def fetch_system_info():
     info = {}
     try:
-        result = subprocess.run(["system_profiler", "SPHardwareDataType"],
-                                capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["system_profiler", "SPHardwareDataType"], capture_output=True, text=True, timeout=10)
         for line in result.stdout.splitlines():
             if "Model Name" in line:
                 info["model"] = line.split(":")[-1].strip()
@@ -25,7 +25,7 @@ def fetch_system_info():
             if ":" in line:
                 k, val = line.split(":", 1)
                 v[k.strip()] = val.strip()
-        info["os"] = f"macOS {v.get('ProductVersion','?')} ({v.get('ProductName','')})"
+        info["os"] = f"macOS {v.get('ProductVersion', '?')} ({v.get('ProductName', '')})"
     except Exception:
         info["os"] = platform.platform()
     try:

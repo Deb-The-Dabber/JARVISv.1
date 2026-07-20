@@ -93,17 +93,11 @@ class TestResolveArgs:
         assert resolved["query"] == "hello World"
 
     def test_nested_dict(self):
-        resolved = _resolve_args(
-            {"nested": {"key": "val-{x}"}},
-            {"x": "123"}, {}
-        )
+        resolved = _resolve_args({"nested": {"key": "val-{x}"}}, {"x": "123"}, {})
         assert resolved["nested"]["key"] == "val-123"
 
     def test_list_values(self):
-        resolved = _resolve_args(
-            {"items": ["{a}", "{b}"]},
-            {"a": "1", "b": "2"}, {}
-        )
+        resolved = _resolve_args({"items": ["{a}", "{b}"]}, {"a": "1", "b": "2"}, {})
         assert resolved["items"] == ["1", "2"]
 
     def test_non_string_passthrough(self):
@@ -142,6 +136,7 @@ class TestWorkflowFileLoading:
         old = WORKFLOW_DIR
         tmp = tempfile.mkdtemp()
         import workflow_engine as we
+
         we.WORKFLOW_DIR = tmp
         yield tmp
         we.WORKFLOW_DIR = old
@@ -151,11 +146,10 @@ class TestWorkflowFileLoading:
         wf = {
             "name": "my_custom_workflow",
             "description": "Test custom workflow",
-            "nodes": [
-                {"id": "step1", "type": "tool_call", "tool": "get_weather_detailed", "args": {}}
-            ],
+            "nodes": [{"id": "step1", "type": "tool_call", "tool": "get_weather_detailed", "args": {}}],
         }
         import yaml
+
         with open(os.path.join(temp_wf_dir, "custom.yaml"), "w") as f:
             yaml.dump(wf, f)
         wfs = list_workflows()
@@ -169,6 +163,7 @@ class TestWorkflowFileLoading:
             "nodes": [{"id": "w", "type": "tool_call", "tool": "get_weather_detailed", "args": {}}],
         }
         import yaml
+
         with open(os.path.join(temp_wf_dir, "test.yaml"), "w") as f:
             yaml.dump(wf, f)
         wfs = list_workflows()

@@ -55,6 +55,7 @@ def _require_sheets_auth(func):
             if not tokens:
                 return "Google Sheets token expired. Re-run gsheets_auth_url to re-authorize."
         return func(tokens.access_token, *args, **kwargs)
+
     return wrapper
 
 
@@ -167,7 +168,7 @@ def gsheets_append(
 ) -> str:
     acquire("sheets")
     if not isinstance(values, list):
-        return "Values must be a list (e.g., [[\"col1\", \"col2\"]])"
+        return 'Values must be a list (e.g., [["col1", "col2"]])'
     body = {
         "values": values if isinstance(values[0], list) else [values],
         "majorDimension": "ROWS",
@@ -340,16 +341,115 @@ SHEETS_TOOLS = {
 }
 
 SHEETS_DEFINITIONS = [
-    {"type": "function", "function": {"name": "gsheets_get", "description": "Get spreadsheet metadata and list its sheets.", "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}}, "required": ["spreadsheet_id"]}}},
-    {"type": "function", "function": {"name": "gsheets_read_range", "description": "Read cell values from a range (e.g., 'Sheet1!A1:C10').", "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range_name": {"type": "string"}}, "required": ["spreadsheet_id", "range_name"]}}},
-    {"type": "function", "function": {"name": "gsheets_read_sheet", "description": "Read all values from a sheet by name.", "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "sheet_name": {"type": "string"}}, "required": ["spreadsheet_id", "sheet_name"]}}},
-    {"type": "function", "function": {"name": "gsheets_append", "description": "Append rows to the bottom of a range.", "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range_name": {"type": "string"}, "values": {"type": "array", "items": {"type": "array"}, "description": "e.g., [[\"A\",\"B\"],[\"C\",\"D\"]]"}}, "required": ["spreadsheet_id", "range_name", "values"]}}},
-    {"type": "function", "function": {"name": "gsheets_update_range", "description": "Overwrite values in a specific range.", "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range_name": {"type": "string"}, "values": {"type": "array", "items": {"type": "array"}}, "value_input_option": {"type": "string", "enum": ["USER_ENTERED", "RAW"]}}, "required": ["spreadsheet_id", "range_name", "values"]}}},
-    {"type": "function", "function": {"name": "gsheets_batch_update", "description": "Execute batch operations (format, insert rows, etc.).", "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "requests_list": {"type": "array", "items": {"type": "object"}}}, "required": ["spreadsheet_id", "requests_list"]}}},
-    {"type": "function", "function": {"name": "gsheets_create", "description": "Create a new Google Sheet.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "sheets_data": {"type": "array", "description": "Optional initial sheet config"}}, "required": ["title"]}}},
-    {"type": "function", "function": {"name": "gsheets_add_sheet", "description": "Add a new sheet/tab to an existing spreadsheet.", "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "title": {"type": "string"}, "rows": {"type": "integer", "default": 1000}, "cols": {"type": "integer", "default": 26}}, "required": ["spreadsheet_id", "title"]}}},
-    {"type": "function", "function": {"name": "gsheets_get_values", "description": "Get values with dimension control.", "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range_name": {"type": "string"}, "major_dimension": {"type": "string", "enum": ["ROWS", "COLUMNS"]}}, "required": ["spreadsheet_id", "range_name"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_get",
+            "description": "Get spreadsheet metadata and list its sheets.",
+            "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}}, "required": ["spreadsheet_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_read_range",
+            "description": "Read cell values from a range (e.g., 'Sheet1!A1:C10').",
+            "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range_name": {"type": "string"}}, "required": ["spreadsheet_id", "range_name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_read_sheet",
+            "description": "Read all values from a sheet by name.",
+            "parameters": {"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "sheet_name": {"type": "string"}}, "required": ["spreadsheet_id", "sheet_name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_append",
+            "description": "Append rows to the bottom of a range.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spreadsheet_id": {"type": "string"},
+                    "range_name": {"type": "string"},
+                    "values": {"type": "array", "items": {"type": "array"}, "description": 'e.g., [["A","B"],["C","D"]]'},
+                },
+                "required": ["spreadsheet_id", "range_name", "values"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_update_range",
+            "description": "Overwrite values in a specific range.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spreadsheet_id": {"type": "string"},
+                    "range_name": {"type": "string"},
+                    "values": {"type": "array", "items": {"type": "array"}},
+                    "value_input_option": {"type": "string", "enum": ["USER_ENTERED", "RAW"]},
+                },
+                "required": ["spreadsheet_id", "range_name", "values"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_batch_update",
+            "description": "Execute batch operations (format, insert rows, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {"spreadsheet_id": {"type": "string"}, "requests_list": {"type": "array", "items": {"type": "object"}}},
+                "required": ["spreadsheet_id", "requests_list"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_create",
+            "description": "Create a new Google Sheet.",
+            "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "sheets_data": {"type": "array", "description": "Optional initial sheet config"}}, "required": ["title"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_add_sheet",
+            "description": "Add a new sheet/tab to an existing spreadsheet.",
+            "parameters": {
+                "type": "object",
+                "properties": {"spreadsheet_id": {"type": "string"}, "title": {"type": "string"}, "rows": {"type": "integer", "default": 1000}, "cols": {"type": "integer", "default": 26}},
+                "required": ["spreadsheet_id", "title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_get_values",
+            "description": "Get values with dimension control.",
+            "parameters": {
+                "type": "object",
+                "properties": {"spreadsheet_id": {"type": "string"}, "range_name": {"type": "string"}, "major_dimension": {"type": "string", "enum": ["ROWS", "COLUMNS"]}},
+                "required": ["spreadsheet_id", "range_name"],
+            },
+        },
+    },
     {"type": "function", "function": {"name": "gsheets_auth_url", "description": "Get OAuth authorization URL for Google Sheets.", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "gsheets_handle_callback", "description": "Handle OAuth callback for Google Sheets.", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "gsheets_handle_callback",
+            "description": "Handle OAuth callback for Google Sheets.",
+            "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+        },
+    },
     {"type": "function", "function": {"name": "gsheets_status", "description": "Check Google Sheets connection status.", "parameters": {"type": "object", "properties": {}}}},
 ]

@@ -41,20 +41,25 @@ def _open_meteo():
         data = requests.get(url, timeout=10).json()
         current = data["current"]
         conditions = {
-            0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
-            45: "foggy", 51: "light drizzle", 61: "light rain", 63: "rain",
-            65: "heavy rain", 71: "light snow", 73: "snow", 75: "heavy snow",
-            80: "rain showers", 95: "thunderstorm",
+            0: "clear sky",
+            1: "mainly clear",
+            2: "partly cloudy",
+            3: "overcast",
+            45: "foggy",
+            51: "light drizzle",
+            61: "light rain",
+            63: "rain",
+            65: "heavy rain",
+            71: "light snow",
+            73: "snow",
+            75: "heavy snow",
+            80: "rain showers",
+            95: "thunderstorm",
         }
         condition = conditions.get(current["weathercode"], "mixed conditions")
         precip = data["hourly"]["precipitation_probability"][:3]
         rain_chance = max(precip) if precip else 0
-        return (
-            f"Temperature: {current['temperature_2m']}°F, {condition}. "
-            f"Humidity: {current['relativehumidity_2m']}%, "
-            f"Wind: {current['windspeed_10m']} mph. "
-            f"Rain chance next 3 hours: {rain_chance}%."
-        )
+        return f"Temperature: {current['temperature_2m']}°F, {condition}. Humidity: {current['relativehumidity_2m']}%, Wind: {current['windspeed_10m']} mph. Rain chance next 3 hours: {rain_chance}%."
     except Exception:
         return None
 
@@ -75,12 +80,7 @@ def _weather_api(open_meteo_fallback: str = None):
         )
         data = resp.json()
         current = data["current"]
-        return (
-            f"Temperature: {current['temp_f']}°F, {current['condition']['text'].lower()}. "
-            f"Humidity: {current['humidity']}%, "
-            f"Wind: {current['wind_mph']} mph. "
-            f"Feels like: {current['feelslike_f']}°F."
-        )
+        return f"Temperature: {current['temp_f']}°F, {current['condition']['text'].lower()}. Humidity: {current['humidity']}%, Wind: {current['wind_mph']} mph. Feels like: {current['feelslike_f']}°F."
     except Exception:
         if open_meteo_fallback:
             return open_meteo_fallback

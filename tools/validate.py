@@ -28,7 +28,9 @@ def _validate_c(filename: str, content: str) -> str:
             tmp_path = f.name
         result = subprocess.run(
             ["gcc", "-fsyntax-only", "-x", "c", tmp_path],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         os.unlink(tmp_path)
         if result.returncode != 0:
@@ -41,5 +43,5 @@ def _validate_c(filename: str, content: str) -> str:
         return ""
     except subprocess.TimeoutExpired:
         return ""
-    except Exception as e:
+    except Exception:
         return ""

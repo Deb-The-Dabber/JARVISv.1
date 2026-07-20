@@ -9,10 +9,10 @@ DB_PATH = os.path.join(os.path.expanduser("~"), "jarvis_memory.db")
 # ─────────────────────────────────────────────
 # STATUS VALUES
 # ─────────────────────────────────────────────
-STATUS_ACTIVE    = "active"
-STATUS_PAUSED    = "paused"
+STATUS_ACTIVE = "active"
+STATUS_PAUSED = "paused"
 STATUS_COMPLETED = "completed"
-STATUS_FAILED    = "failed"
+STATUS_FAILED = "failed"
 
 VALID_STATUSES = {STATUS_ACTIVE, STATUS_PAUSED, STATUS_COMPLETED, STATUS_FAILED}
 
@@ -46,12 +46,11 @@ def init_db():
 # CORE CRUD
 # ─────────────────────────────────────────────
 
+
 def _find_similar_goal(title: str, threshold: float = 0.85) -> int | None:
     """Return goal_id if a similar active goal title exists, else None."""
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT id, title FROM goals WHERE status = 'active'"
-        ).fetchall()
+        rows = conn.execute("SELECT id, title FROM goals WHERE status = 'active'").fetchall()
         for goal_id, existing_title in rows:
             similarity = SequenceMatcher(None, title.lower(), existing_title.lower()).ratio()
             if similarity >= threshold:
@@ -95,14 +94,10 @@ def list_goals(status: str = "active") -> str:
     """
     with _connect() as conn:
         if status == "all":
-            rows = conn.execute(
-                "SELECT id, title, status, priority, progress_notes, updated_at "
-                "FROM goals ORDER BY priority DESC, updated_at DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT id, title, status, priority, progress_notes, updated_at FROM goals ORDER BY priority DESC, updated_at DESC").fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, title, status, priority, progress_notes, updated_at "
-                "FROM goals WHERE status = ? ORDER BY priority DESC, updated_at DESC",
+                "SELECT id, title, status, priority, progress_notes, updated_at FROM goals WHERE status = ? ORDER BY priority DESC, updated_at DESC",
                 (status,),
             ).fetchall()
 
@@ -129,9 +124,7 @@ def get_goal(goal_id: int) -> str:
     """
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, title, description, status, priority, progress_notes, "
-            "created_at, updated_at, last_checked, next_check_at "
-            "FROM goals WHERE id = ?",
+            "SELECT id, title, description, status, priority, progress_notes, created_at, updated_at, last_checked, next_check_at FROM goals WHERE id = ?",
             (int(goal_id),),
         ).fetchone()
 
@@ -262,9 +255,7 @@ def get_goals_summary() -> str:
     Return a brief summary of goal counts by status. Used in system prompt injection.
     """
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT status, COUNT(*) FROM goals GROUP BY status"
-        ).fetchall()
+        rows = conn.execute("SELECT status, COUNT(*) FROM goals GROUP BY status").fetchall()
     if not rows:
         return ""
     parts = [f"{count} {status}" for status, count in rows]

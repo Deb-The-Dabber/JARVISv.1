@@ -48,6 +48,7 @@ def _require_gmail_auth(func):
             if not tokens:
                 return "Gmail token expired. Re-run /gmail-auth to re-authorize."
         return func(tokens.access_token, *args, **kwargs)
+
     return wrapper
 
 
@@ -129,8 +130,7 @@ def gmail_send(to: str, subject: str, body: str, access_token: str = "") -> str:
     message["subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
 
-    _gmail_api_request("POST", f"{GMAIL_API_BASE}/messages/send", access_token,
-                       json={"raw": raw}, timeout=15)
+    _gmail_api_request("POST", f"{GMAIL_API_BASE}/messages/send", access_token, json={"raw": raw}, timeout=15)
     return f"Email sent to {to}."
 
 
@@ -143,8 +143,7 @@ def gmail_get_labels(access_token: str = "") -> str:
 
 @_require_gmail_auth
 def gmail_get_message(message_id: str, access_token: str = "") -> str:
-    response = _gmail_api_request("GET", f"{GMAIL_API_BASE}/messages/{message_id}", access_token,
-                                  params={"format": "full"}, timeout=15)
+    response = _gmail_api_request("GET", f"{GMAIL_API_BASE}/messages/{message_id}", access_token, params={"format": "full"}, timeout=15)
     msg = response.json()
     headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
     snippet = msg.get("snippet", "")
@@ -177,11 +176,47 @@ GMAIL_TOOLS = {
 }
 
 GMAIL_DEFINITIONS = [
-    {"type": "function", "function": {"name": "gmail_search", "description": "Search Gmail messages. Requires prior OAuth authorization via /gmail-auth.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Gmail search query (e.g., 'from:github subject:security')"}, "max_results": {"type": "integer", "default": 20}}, "required": ["query"]}}},
-    {"type": "function", "function": {"name": "gmail_send", "description": "Send an email via Gmail. Requires prior OAuth authorization via /gmail-auth.", "parameters": {"type": "object", "properties": {"to": {"type": "string", "description": "Recipient email address"}, "subject": {"type": "string"}, "body": {"type": "string"}}, "required": ["to", "subject", "body"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "gmail_search",
+            "description": "Search Gmail messages. Requires prior OAuth authorization via /gmail-auth.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Gmail search query (e.g., 'from:github subject:security')"}, "max_results": {"type": "integer", "default": 20}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gmail_send",
+            "description": "Send an email via Gmail. Requires prior OAuth authorization via /gmail-auth.",
+            "parameters": {
+                "type": "object",
+                "properties": {"to": {"type": "string", "description": "Recipient email address"}, "subject": {"type": "string"}, "body": {"type": "string"}},
+                "required": ["to", "subject", "body"],
+            },
+        },
+    },
     {"type": "function", "function": {"name": "gmail_get_labels", "description": "List all Gmail labels.", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "gmail_get_message", "description": "Get full message content by ID.", "parameters": {"type": "object", "properties": {"message_id": {"type": "string"}}, "required": ["message_id"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "gmail_get_message",
+            "description": "Get full message content by ID.",
+            "parameters": {"type": "object", "properties": {"message_id": {"type": "string"}}, "required": ["message_id"]},
+        },
+    },
     {"type": "function", "function": {"name": "gmail_status", "description": "Check Gmail connection status.", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "gmail_auth_url", "description": "Get OAuth authorization URL for Gmail.", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "gmail_handle_callback", "description": "Handle OAuth callback with authorization code.", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "gmail_handle_callback",
+            "description": "Handle OAuth callback with authorization code.",
+            "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+        },
+    },
 ]

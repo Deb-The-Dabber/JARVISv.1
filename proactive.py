@@ -12,40 +12,40 @@ from priority import queue_alert
 from vector_memory import add_to_vector_memory
 from watchlog import clear_old_logs, log_event, log_screen
 
-CHECK_INTERVAL        = 30
-CPU_THRESHOLD         = 80
-RAM_THRESHOLD         = 85
-DISK_FREE_MIN_GB      = 10
-DOWNLOADS_MAX_GB      = 5
-DESKTOP_MAX_FILES     = 20
-APP_OPEN_HOURS        = 3
-WEATHER_CHECK_MINS    = 30
-SCREEN_CHECK_MINS     = 30
-BATTERY_MIN_PCT       = 20
+CHECK_INTERVAL = 30
+CPU_THRESHOLD = 80
+RAM_THRESHOLD = 85
+DISK_FREE_MIN_GB = 10
+DOWNLOADS_MAX_GB = 5
+DESKTOP_MAX_FILES = 20
+APP_OPEN_HOURS = 3
+WEATHER_CHECK_MINS = 30
+SCREEN_CHECK_MINS = 30
+BATTERY_MIN_PCT = 20
 
-USER_LAT    = 41.7606
-USER_LON    = -88.3201
-USER_TZ     = "America/Chicago"
-HOME        = os.path.expanduser("~")
+USER_LAT = 41.7606
+USER_LON = -88.3201
+USER_TZ = "America/Chicago"
+HOME = os.path.expanduser("~")
 
 _state = {
-    "cpu_high_cycles":        0,
-    "last_weather_check":     0,
-    "last_rain_warning":      0,
-    "last_screen_check":      0,
-    "warned_disk":            False,
-    "warned_ram":             False,
-    "warned_downloads":       False,
-    "warned_desktop":         False,
-    "calendar_warned_15":     set(),
-    "calendar_warned_5":      set(),
-    "app_open_since":         {},
-    "app_warned":             set(),
-    "briefing_done":          False,
-    "last_evening_summary":   None,
-    "last_net_warning":       0,
-    "caffeinate_proc":        None,
-    "user_active":            True,
+    "cpu_high_cycles": 0,
+    "last_weather_check": 0,
+    "last_rain_warning": 0,
+    "last_screen_check": 0,
+    "warned_disk": False,
+    "warned_ram": False,
+    "warned_downloads": False,
+    "warned_desktop": False,
+    "calendar_warned_15": set(),
+    "calendar_warned_5": set(),
+    "app_open_since": {},
+    "app_warned": set(),
+    "briefing_done": False,
+    "last_evening_summary": None,
+    "last_net_warning": 0,
+    "caffeinate_proc": None,
+    "user_active": True,
 }
 
 _speak_fn = None
@@ -56,10 +56,12 @@ def add_alert(alert_type: str, message: str, priority: int = 3):
     queue_alert(alert_type, message, force=priority >= 5)
     try:
         from push_notify import enqueue_message
+
         if priority >= 3:
             enqueue_message(message, priority=priority)
     except Exception:
         pass
+
 
 def init(speak_fn, process_fn):
     global _speak_fn
@@ -67,10 +69,7 @@ def init(speak_fn, process_fn):
     _ = process_fn
 
 
-def _emit_event(category: str, event: str, detail: str = "", *,
-                alert_type: str | None = None,
-                priority: str = "",
-                speech: str | None = None):
+def _emit_event(category: str, event: str, detail: str = "", *, alert_type: str | None = None, priority: str = "", speech: str | None = None):
     log_event(category, event, detail)
     vector_text = f"{category}: {event}"
     if detail:
@@ -78,6 +77,7 @@ def _emit_event(category: str, event: str, detail: str = "", *,
     add_to_vector_memory(vector_text, category="system_event")
     if speech and alert_type:
         queue_alert(alert_type, speech, force=priority == PRIORITY_CRITICAL)
+
 
 # ─────────────────────────────────────────────
 # CAFFEINATE — prevent idle sleep
@@ -96,10 +96,12 @@ def start_caffeinate():
     except Exception as e:
         print(f"  Caffeinate failed: {e}")
 
+
 def stop_caffeinate():
     if _state["caffeinate_proc"]:
         _state["caffeinate_proc"].terminate()
         _state["caffeinate_proc"] = None
+
 
 # ─────────────────────────────────────────────
 # USER ACTIVITY DETECTION
@@ -107,10 +109,7 @@ def stop_caffeinate():
 def check_user_activity():
     """Detect if user is actively using the Mac."""
     try:
-        result = subprocess.run(
-            ["ioreg", "-c", "IOHIDSystem"],
-            capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(["ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True, timeout=5)
         for line in result.stdout.splitlines():
             if "HIDIdleTime" in line:
                 idle_ns = int(line.split("=")[-1].strip())
@@ -129,6 +128,7 @@ def check_user_activity():
         pass
     return 0
 
+
 # ─────────────────────────────────────────────
 # MONITORS
 # ─────────────────────────────────────────────
@@ -137,12 +137,13 @@ def check_cpu():
     if cpu > CPU_THRESHOLD:
         _state["cpu_high_cycles"] += 1
         if _state["cpu_high_cycles"] == 2:
-            procs = sorted(psutil.process_iter(['name','cpu_percent']),
-                           key=lambda p: p.info['cpu_percent'] or 0, reverse=True)
-            top = procs[0].info['name'] if procs else "unknown"
+            procs = sorted(psutil.process_iter(["name", "cpu_percent"]), key=lambda p: p.info["cpu_percent"] or 0, reverse=True)
+            top = procs[0].info["name"] if procs else "unknown"
             msg = f"CPU spike at {int(cpu)}% — top process: {top}"
             _emit_event(
-                "system", "CPU spike", msg,
+                "system",
+                "CPU spike",
+                msg,
                 alert_type="cpu_spike",
                 priority="high",
                 speech=f"Heads up, CPU is at {int(cpu)} percent. The top process is {top}.",
@@ -150,12 +151,15 @@ def check_cpu():
     else:
         _state["cpu_high_cycles"] = 0
 
+
 def check_ram():
     ram = psutil.virtual_memory()
     if ram.percent > RAM_THRESHOLD and not _state["warned_ram"]:
         msg = f"RAM at {ram.percent:.0f}%"
         _emit_event(
-            "system", "High RAM usage", msg,
+            "system",
+            "High RAM usage",
+            msg,
             alert_type="ram_high",
             priority="high",
             speech=f"RAM is at {int(ram.percent)} percent. You might want to close some apps.",
@@ -164,13 +168,16 @@ def check_ram():
     elif ram.percent < RAM_THRESHOLD - 10:
         _state["warned_ram"] = False
 
+
 def check_disk():
     usage = psutil.disk_usage(HOME)
     free_gb = usage.free / (1024**3)
     if free_gb < DISK_FREE_MIN_GB and not _state["warned_disk"]:
         detail = f"{free_gb:.1f}GB free"
         _emit_event(
-            "system", "Low disk space", detail,
+            "system",
+            "Low disk space",
+            detail,
             alert_type="disk_low",
             priority="high",
             speech=f"You're running low on disk space — only {free_gb:.1f} gigabytes free.",
@@ -179,6 +186,7 @@ def check_disk():
     elif free_gb > DISK_FREE_MIN_GB + 5:
         _state["warned_disk"] = False
 
+
 def check_network():
     try:
         requests.get("https://www.google.com", timeout=3)
@@ -186,26 +194,28 @@ def check_network():
         now = time.time()
         if now - _state["last_net_warning"] > 300:
             _emit_event(
-                "network", "Internet connection lost", "",
+                "network",
+                "Internet connection lost",
+                "",
                 alert_type="internet_down",
                 priority=PRIORITY_CRITICAL,
                 speech="It looks like you've lost your internet connection.",
             )
             _state["last_net_warning"] = now
 
+
 def check_downloads_folder():
     folder = os.path.join(HOME, "Downloads")
-    if not os.path.exists(folder): return
-    total = sum(
-        os.path.getsize(os.path.join(folder, f))
-        for f in os.listdir(folder)
-        if os.path.isfile(os.path.join(folder, f))
-    )
+    if not os.path.exists(folder):
+        return
+    total = sum(os.path.getsize(os.path.join(folder, f)) for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)))
     total_gb = total / (1024**3)
     if total_gb > DOWNLOADS_MAX_GB and not _state["warned_downloads"]:
         detail = f"{total_gb:.1f}GB"
         _emit_event(
-            "files", "Downloads folder large", detail,
+            "files",
+            "Downloads folder large",
+            detail,
             alert_type="downloads_large",
             priority="normal",
             speech=f"Your Downloads folder is {total_gb:.1f} gigabytes. Want me to organize it?",
@@ -214,14 +224,18 @@ def check_downloads_folder():
     elif total_gb < DOWNLOADS_MAX_GB - 1:
         _state["warned_downloads"] = False
 
+
 def check_desktop_clutter():
     desktop = os.path.join(HOME, "Desktop")
-    if not os.path.exists(desktop): return
+    if not os.path.exists(desktop):
+        return
     files = [f for f in os.listdir(desktop) if not f.startswith(".")]
     if len(files) > DESKTOP_MAX_FILES and not _state["warned_desktop"]:
         detail = f"{len(files)} items"
         _emit_event(
-            "files", "Desktop cluttered", detail,
+            "files",
+            "Desktop cluttered",
+            detail,
             alert_type="desktop_clutter",
             priority="low",
             speech=f"Your Desktop has {len(files)} items on it. Want me to help organize it?",
@@ -230,27 +244,28 @@ def check_desktop_clutter():
     elif len(files) <= DESKTOP_MAX_FILES:
         _state["warned_desktop"] = False
 
+
 def check_weather():
     now = time.time()
-    if now - _state["last_weather_check"] < WEATHER_CHECK_MINS * 60: return
+    if now - _state["last_weather_check"] < WEATHER_CHECK_MINS * 60:
+        return
     _state["last_weather_check"] = now
     try:
-        url = (f"https://api.open-meteo.com/v1/forecast"
-               f"?latitude={USER_LAT}&longitude={USER_LON}"
-               f"&hourly=precipitation_probability,weathercode"
-               f"&forecast_days=1&timezone={USER_TZ}")
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={USER_LAT}&longitude={USER_LON}&hourly=precipitation_probability,weathercode&forecast_days=1&timezone={USER_TZ}"
         data = requests.get(url, timeout=10).json()
         times = data["hourly"]["time"]
         precip = data["hourly"]["precipitation_probability"]
         now_str = datetime.datetime.now().strftime("%Y-%m-%dT%H:00")
         for i, t in enumerate(times):
             if t == now_str:
-                upcoming = precip[i:i+2]
+                upcoming = precip[i : i + 2]
                 if any(p >= 70 for p in upcoming):
                     if now - _state["last_rain_warning"] > 3600:
                         detail = f"{max(upcoming)}% chance"
                         _emit_event(
-                            "weather", "Rain incoming", detail,
+                            "weather",
+                            "Rain incoming",
+                            detail,
                             alert_type="rain_incoming",
                             priority="normal",
                             speech="Rain is likely in the next hour or two. Just a heads up.",
@@ -260,9 +275,10 @@ def check_weather():
     except Exception:
         pass
 
+
 def check_calendar():
     try:
-        script = '''
+        script = """
         set output to ""
         set theNow to current date
         set in15 to theNow + 900
@@ -279,16 +295,17 @@ def check_calendar():
             end repeat
         end tell
         return output
-        '''
-        result = subprocess.run(["osascript", "-e", script],
-                                capture_output=True, text=True, timeout=10)
+        """
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
         out = result.stdout.strip()
-        if not out: return
+        if not out:
+            return
         events = [e for e in out.split("~") if "|" in e]
         now = datetime.datetime.now()
         for event_str in events:
             parts = event_str.split("|")
-            if len(parts) < 3: continue
+            if len(parts) < 3:
+                continue
             eid, title, start_str = parts[0], parts[1], parts[2]
             try:
                 start = datetime.datetime.strptime(start_str.strip()[:19], "%A, %B %d, %Y %I:%M:%S")
@@ -297,7 +314,8 @@ def check_calendar():
             mins_away = (start - now).total_seconds() / 60
             if 13 <= mins_away <= 16 and eid not in _state["calendar_warned_15"]:
                 _emit_event(
-                    "calendar", f"Event in 15 min: {title}",
+                    "calendar",
+                    f"Event in 15 min: {title}",
                     alert_type="calendar_15min",
                     priority=PRIORITY_CRITICAL,
                     speech=f"Heads up — {title} starts in about 15 minutes.",
@@ -305,7 +323,8 @@ def check_calendar():
                 _state["calendar_warned_15"].add(eid)
             if 4 <= mins_away <= 6 and eid not in _state["calendar_warned_5"]:
                 _emit_event(
-                    "calendar", f"Event in 5 min: {title}",
+                    "calendar",
+                    f"Event in 5 min: {title}",
                     alert_type="calendar_5min",
                     priority=PRIORITY_CRITICAL,
                     speech=f"{title} starts in 5 minutes.",
@@ -314,13 +333,14 @@ def check_calendar():
     except Exception:
         pass
 
+
 def check_open_apps():
     try:
         script = 'tell application "System Events" to get name of every process whose background only is false'
         result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=5)
         open_apps = [a.strip() for a in result.stdout.strip().split(",")]
         now = time.time()
-        interesting = ["Xcode","Visual Studio Code","Terminal","PyCharm","Cursor","Antigravity"]
+        interesting = ["Xcode", "Visual Studio Code", "Terminal", "PyCharm", "Cursor", "Antigravity"]
         for app in open_apps:
             if app in interesting:
                 if app not in _state["app_open_since"]:
@@ -330,8 +350,7 @@ def check_open_apps():
                 elif now - _state["app_open_since"][app] > APP_OPEN_HOURS * 3600:
                     if app not in _state["app_warned"]:
                         hours = (now - _state["app_open_since"][app]) / 3600
-                        queue_alert("app_open_long",
-                                    f"You've had {app} open for {hours:.0f} hours. Don't forget to take a break.")
+                        queue_alert("app_open_long", f"You've had {app} open for {hours:.0f} hours. Don't forget to take a break.")
                         _state["app_warned"].add(app)
         for app in list(_state["app_open_since"].keys()):
             if app not in open_apps:
@@ -342,10 +361,12 @@ def check_open_apps():
     except Exception:
         pass
 
+
 def check_screen():
     """Periodic screen check — only when user is away."""
     now = time.time()
-    if now - _state["last_screen_check"] < SCREEN_CHECK_MINS * 60: return
+    if now - _state["last_screen_check"] < SCREEN_CHECK_MINS * 60:
+        return
     _state["last_screen_check"] = now
     try:
         from screen import (
@@ -353,18 +374,18 @@ def check_screen():
             describe_screen_with_moondream,
             get_frontmost_app,
         )
+
         app = get_frontmost_app()
         path = capture_screenshot()
-        description = describe_screen_with_moondream(path,
-            "Briefly describe what's on screen in 1 sentence. Focus on main content.")
+        description = describe_screen_with_moondream(path, "Briefly describe what's on screen in 1 sentence. Focus on main content.")
         log_screen(description, app)
         # If something urgent and user is away, log it prominently
-        if any(word in description.lower() for word in
-               ["error","warning","alert","failed","crash","urgent","unread"]):
+        if any(word in description.lower() for word in ["error", "warning", "alert", "failed", "crash", "urgent", "unread"]):
             log_event("screen", f"Notable content in {app}", description[:200])
             add_to_vector_memory(f"screen: Notable content in {app} | {description[:200]}", category="system_event")
     except Exception:
         pass
+
 
 # ─────────────────────────────────────────────
 # STARTUP BRIEFING
@@ -374,9 +395,12 @@ def startup_briefing():
     now = datetime.datetime.now()
     hour = now.hour
 
-    if hour < 12: greeting = "Good morning"
-    elif hour < 17: greeting = "Good afternoon"
-    else: greeting = "Good evening"
+    if hour < 12:
+        greeting = "Good morning"
+    elif hour < 17:
+        greeting = "Good afternoon"
+    else:
+        greeting = "Good evening"
 
     queue_alert("startup_briefing", f"{greeting}, Debasish. Jarvis is online.", force=True)
 
@@ -384,13 +408,9 @@ def startup_briefing():
 
     # Weather
     try:
-        url = (f"https://api.open-meteo.com/v1/forecast"
-               f"?latitude={USER_LAT}&longitude={USER_LON}"
-               f"&current=temperature_2m,weathercode"
-               f"&temperature_unit=fahrenheit&timezone={USER_TZ}")
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={USER_LAT}&longitude={USER_LON}&current=temperature_2m,weathercode&temperature_unit=fahrenheit&timezone={USER_TZ}"
         data = requests.get(url, timeout=10).json()["current"]
-        conditions = {0:"clear",1:"mostly clear",2:"partly cloudy",3:"overcast",
-                     61:"rainy",63:"rainy",95:"stormy"}
+        conditions = {0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast", 61: "rainy", 63: "rainy", 95: "stormy"}
         condition = conditions.get(data["weathercode"], "mixed")
         queue_alert("startup_briefing", f"It's {data['temperature_2m']} degrees and {condition} outside.", force=True)
     except Exception:
@@ -400,14 +420,11 @@ def startup_briefing():
 
     # Recap hint
     from watchlog import get_events_since
+
     recent = get_events_since(hours=12)
     away_events = [e for e in recent if e[0] != "system"]
     if len(away_events) > 3:
-        queue_alert(
-            "startup_briefing",
-            f"While you were away I logged {len(away_events)} events. Ask me what did I miss for a full recap.",
-            force=True
-        )
+        queue_alert("startup_briefing", f"While you were away I logged {len(away_events)} events. Ask me what did I miss for a full recap.", force=True)
 
     time.sleep(0.3)
 
@@ -415,17 +432,13 @@ def startup_briefing():
     cpu = psutil.cpu_percent(interval=1)
     ram = psutil.virtual_memory().percent
     disk_free = psutil.disk_usage(HOME).free / (1024**3)
-    queue_alert(
-        "startup_briefing",
-        f"System: CPU at {int(cpu)} percent, RAM at {int(ram)} percent, {disk_free:.0f} gigabytes free.",
-        force=True
-    )
+    queue_alert("startup_briefing", f"System: CPU at {int(cpu)} percent, RAM at {int(ram)} percent, {disk_free:.0f} gigabytes free.", force=True)
 
     time.sleep(0.3)
 
     # Calendar
     try:
-        script = '''
+        script = """
         set output to ""
         set theNow to current date
         set endOfDay to theNow - (time of theNow) + 86400
@@ -439,9 +452,8 @@ def startup_briefing():
             end repeat
         end tell
         return output
-        '''
-        result = subprocess.run(["osascript", "-e", script],
-                                capture_output=True, text=True, timeout=10)
+        """
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
         out = result.stdout.strip().rstrip(",")
         if out:
             queue_alert("startup_briefing", f"You have the following events today: {out}.", force=True)
@@ -453,6 +465,8 @@ def startup_briefing():
     _state["briefing_done"] = True
     log_event("system", "Startup briefing complete")
     clear_old_logs(days=7)
+
+
 # ─────────────────────────────────────────────
 # EVENING SUMMARY
 # ─────────────────────────────────────────────
@@ -463,13 +477,11 @@ def maybe_evening_summary():
         if _state["last_evening_summary"] != today:
             _state["last_evening_summary"] = today
             from watchlog import get_events_since
+
             events = get_events_since(hours=12)
             log_event("system", "Evening summary generated")
-            queue_alert(
-                "evening_summary",
-                f"Good evening. Today I logged {len(events)} events. "
-                f"Ask me 'what happened today?' for details. Have a good night."
-            )
+            queue_alert("evening_summary", f"Good evening. Today I logged {len(events)} events. Ask me 'what happened today?' for details. Have a good night.")
+
 
 # ─────────────────────────────────────────────
 # MAIN LOOP
@@ -493,6 +505,7 @@ def _monitor_loop():
         except Exception:
             pass
         time.sleep(CHECK_INTERVAL)
+
 
 def start():
     # Start priority engine first

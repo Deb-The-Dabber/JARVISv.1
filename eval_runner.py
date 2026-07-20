@@ -8,9 +8,7 @@ import time
 from config import EVAL_DB_PATH
 
 EVAL_RUNS_DIR = os.path.expanduser("~/.jarvis/eval_runs")
-GOLDEN_SET_PATH = os.path.join(
-    os.path.dirname(__file__), "tests", "eval", "golden_set.jsonl"
-)
+GOLDEN_SET_PATH = os.path.join(os.path.dirname(__file__), "tests", "eval", "golden_set.jsonl")
 
 
 def load_golden_set(path: str = None) -> list[dict]:
@@ -82,6 +80,7 @@ def run_eval_case(case: dict, require_no_api: bool = False) -> dict:
     called_tools = []
     try:
         from brain import get_last_tool_calls
+
         called_tools = get_last_tool_calls()
     except Exception:
         pass
@@ -191,17 +190,19 @@ def load_eval_history(limit: int = 10) -> list[dict]:
         try:
             with open(os.path.join(EVAL_RUNS_DIR, fname)) as f:
                 report = json.load(f)
-                history.append({
-                    "timestamp": report.get("timestamp"),
-                    "passed": report.get("passed"),
-                    "failed": report.get("failed"),
-                    "skipped": report.get("skipped"),
-                    "pass_rate": report.get("pass_rate"),
-                    "avg_tool_accuracy": report.get("avg_tool_accuracy"),
-                    "avg_keyword_recall": report.get("avg_keyword_recall"),
-                    "avg_latency_seconds": report.get("avg_latency_seconds"),
-                    "total": report.get("total"),
-                })
+                history.append(
+                    {
+                        "timestamp": report.get("timestamp"),
+                        "passed": report.get("passed"),
+                        "failed": report.get("failed"),
+                        "skipped": report.get("skipped"),
+                        "pass_rate": report.get("pass_rate"),
+                        "avg_tool_accuracy": report.get("avg_tool_accuracy"),
+                        "avg_keyword_recall": report.get("avg_keyword_recall"),
+                        "avg_latency_seconds": report.get("avg_latency_seconds"),
+                        "total": report.get("total"),
+                    }
+                )
         except Exception:
             pass
     return history
@@ -241,13 +242,14 @@ if __name__ == "__main__":
     if report.get("failed", 0) > 0:
         for r in report.get("results", []):
             if not r.get("passed") and not r.get("skipped"):
-                ta = r.get('tool_accuracy')
-                kr = r.get('keyword_recall')
+                ta = r.get("tool_accuracy")
+                kr = r.get("keyword_recall")
                 print(f"  FAIL: {r['prompt'][:60]} — tool_acc={ta}, kw_recall={kr}")
         sys.exit(1)
 
 
 # ── SQLite Storage ──
+
 
 def _eval_db() -> sqlite3.Connection:
     conn = sqlite3.connect(EVAL_DB_PATH)
@@ -305,10 +307,16 @@ def _save_to_sqlite(report: dict):
                 avg_latency_seconds, llm_score)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                report["timestamp"], report["total"], report["passed"],
-                report["failed"], report["skipped"], report["pass_rate"],
-                report.get("avg_tool_accuracy"), report.get("avg_keyword_recall"),
-                report.get("avg_intent_accuracy"), report.get("avg_latency_seconds"),
+                report["timestamp"],
+                report["total"],
+                report["passed"],
+                report["failed"],
+                report["skipped"],
+                report["pass_rate"],
+                report.get("avg_tool_accuracy"),
+                report.get("avg_keyword_recall"),
+                report.get("avg_intent_accuracy"),
+                report.get("avg_latency_seconds"),
                 report.get("llm_score"),
             ),
         )
@@ -321,13 +329,19 @@ def _save_to_sqlite(report: dict):
                     latency, passed, llm_score, error)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    run_id, r.get("prompt"), r.get("intent"),
-                    r.get("expected_intent"), r.get("intent_accuracy"),
+                    run_id,
+                    r.get("prompt"),
+                    r.get("intent"),
+                    r.get("expected_intent"),
+                    r.get("intent_accuracy"),
                     json.dumps(r.get("tools_called") or []),
                     json.dumps(r.get("expected_tools") or []),
-                    r.get("tool_accuracy"), r.get("keyword_recall"),
-                    r.get("latency"), int(r.get("passed", False)),
-                    r.get("llm_score"), r.get("error"),
+                    r.get("tool_accuracy"),
+                    r.get("keyword_recall"),
+                    r.get("latency"),
+                    int(r.get("passed", False)),
+                    r.get("llm_score"),
+                    r.get("error"),
                 ),
             )
         conn.commit()
@@ -355,6 +369,7 @@ def llm_judge_score(prompt: str, response: str) -> float:
         from google.genai import types
 
         from brain import _get_client
+
         client = _get_client()
         if not client:
             return 0.5

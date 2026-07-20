@@ -79,8 +79,11 @@ class TestPollinationsEmergency:
 
     def test_pollinations_chat(self, api):
         keys_to_unset = [
-            "NVIDIA_NEMOTRON_API_KEY", "GOOGLE_GENAI_API_KEY",
-            "GROQ_API_KEY", "OPENROUTER_API_KEY", "KIMI_API_KEY",
+            "NVIDIA_NEMOTRON_API_KEY",
+            "GOOGLE_GENAI_API_KEY",
+            "GROQ_API_KEY",
+            "OPENROUTER_API_KEY",
+            "KIMI_API_KEY",
             "DEEPSEEK_API_KEY",
         ]
         with env_unset("NVIDIA_NEMOTRON_API_KEY"):

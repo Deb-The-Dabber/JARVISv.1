@@ -34,8 +34,14 @@ class TestProviderFallbackChain:
         """When all providers fail, user gets a graceful error, not a crash."""
         mock_provider.reset()
         for p in [
-            "Nemotron Ultra", "DeepSeek", "Gemini", "Groq",
-            "Kimi K2", "NVIDIA NIM", "OpenRouter", "Pollinations",
+            "Nemotron Ultra",
+            "DeepSeek",
+            "Gemini",
+            "Groq",
+            "Kimi K2",
+            "NVIDIA NIM",
+            "OpenRouter",
+            "Pollinations",
         ]:
             mock_provider.fail(p, mode="500", duration=120)
         r = mock_api.ask("weather", timeout=120)
@@ -136,7 +142,13 @@ class TestMockProviderControl:
         """All expected providers should be in the mock state."""
         state = mock_provider.state()
         for p in [
-            "Nemotron Ultra", "DeepSeek", "Groq", "Gemini",
-            "Kimi K2", "NVIDIA NIM", "OpenRouter", "Pollinations",
+            "Nemotron Ultra",
+            "DeepSeek",
+            "Groq",
+            "Gemini",
+            "Kimi K2",
+            "NVIDIA NIM",
+            "OpenRouter",
+            "Pollinations",
         ]:
             assert p in state, f"Missing provider: {p}"

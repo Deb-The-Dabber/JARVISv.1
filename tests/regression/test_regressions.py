@@ -92,16 +92,12 @@ class TestP0Regressions:
         r2 = api.ask("read the first file in that directory")
         assert r2.status_code == 200
         reply2 = r2.json()["reply"]
-        assert "AAA_CONTENT" in reply2 or "BBB" in reply2 or "AAA" in reply2, (
-            f"Expected file content in cross-turn ref: {reply2[:200]}"
-        )
+        assert "AAA_CONTENT" in reply2 or "BBB" in reply2 or "AAA" in reply2, f"Expected file content in cross-turn ref: {reply2[:200]}"
 
         r3 = api.ask("create file c.txt in that same directory with content CCC_CONTENT")
         assert r3.status_code == 200
         assert (test_dir / "c.txt").exists(), "c.txt was not created"
-        assert (test_dir / "c.txt").read_text().strip() == "CCC_CONTENT", (
-            f"Wrong content: {(test_dir / 'c.txt').read_text()}"
-        )
+        assert (test_dir / "c.txt").read_text().strip() == "CCC_CONTENT", f"Wrong content: {(test_dir / 'c.txt').read_text()}"
 
     # ── Test 5: self-healing screen click (local only) ────────────────
     @pytest.mark.local
@@ -115,9 +111,7 @@ class TestP0Regressions:
         r2 = api.ask("click the '1' button in calculator")
         assert r2.status_code == 200
         reply2 = r2.json()["reply"].lower()
-        assert any(kw in reply2 for kw in ["clicked", "click", "found", "button", "pressed", "tap"]), (
-            f"Click by description did not register: {reply2[:200]}"
-        )
+        assert any(kw in reply2 for kw in ["clicked", "click", "found", "button", "pressed", "tap"]), f"Click by description did not register: {reply2[:200]}"
 
         r3 = api.ask("read calculator display")
         assert r3.status_code == 200

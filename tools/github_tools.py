@@ -28,6 +28,7 @@ def _require_github_auth(func):
         if tokens.is_expired():
             return "GitHub token expired. Re-run /github-auth to re-authorize."
         return func(tokens.access_token, *args, **kwargs)
+
     return wrapper
 
 
@@ -44,7 +45,7 @@ def github_handle_callback(code: str, state: str = "") -> str:
             TokenStore.save("github", tokens)
             try:
                 user = _github_provider.get_user_info(tokens.access_token)
-                email = user.get('email') or user.get('login', 'unknown')
+                email = user.get("email") or user.get("login", "unknown")
                 print(f"[GitHub callback] Connected as {email}")
                 return f"GitHub connected as {email}."
             except Exception as e:
@@ -55,6 +56,7 @@ def github_handle_callback(code: str, state: str = "") -> str:
     except Exception as e:
         print(f"[GitHub callback] Exception: {type(e).__name__}: {e}")
         import traceback
+
         traceback.print_exc()
         return f"GitHub auth failed: {e}"
 
@@ -159,12 +161,83 @@ GITHUB_TOOLS = {
 }
 
 GITHUB_DEFINITIONS = [
-    {"type": "function", "function": {"name": "github_list_repos", "description": "List your GitHub repositories.", "parameters": {"type": "object", "properties": {"visibility": {"type": "string", "enum": ["all", "public", "private"], "default": "all"}, "affiliation": {"type": "string", "enum": ["owner", "collaborator", "organization_member"], "default": "owner"}, "per_page": {"type": "integer", "default": 30}}}}},
-    {"type": "function", "function": {"name": "github_search_code", "description": "Search code across GitHub repositories.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query (e.g., 'repo:owner/repo function_name')"}, "per_page": {"type": "integer", "default": 10}}}}},
-    {"type": "function", "function": {"name": "github_create_issue", "description": "Create a GitHub issue. Requires confirmation.", "parameters": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "title": {"type": "string"}, "body": {"type": "string", "default": ""}, "labels": {"type": "array", "items": {"type": "string"}, "default": []}}, "required": ["owner", "repo", "title"]}}},
-    {"type": "function", "function": {"name": "github_list_issues", "description": "List issues in a repository.", "parameters": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}, "state": {"type": "string", "enum": ["open", "closed", "all"], "default": "open"}, "labels": {"type": "string", "description": "Comma-separated labels"}, "per_page": {"type": "integer", "default": 20}}}}},
-    {"type": "function", "function": {"name": "github_get_repo", "description": "Get repository details.", "parameters": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}}, "required": ["owner", "repo"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "github_list_repos",
+            "description": "List your GitHub repositories.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "visibility": {"type": "string", "enum": ["all", "public", "private"], "default": "all"},
+                    "affiliation": {"type": "string", "enum": ["owner", "collaborator", "organization_member"], "default": "owner"},
+                    "per_page": {"type": "integer", "default": 30},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_search_code",
+            "description": "Search code across GitHub repositories.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Search query (e.g., 'repo:owner/repo function_name')"}, "per_page": {"type": "integer", "default": 10}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_create_issue",
+            "description": "Create a GitHub issue. Requires confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string"},
+                    "repo": {"type": "string"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string", "default": ""},
+                    "labels": {"type": "array", "items": {"type": "string"}, "default": []},
+                },
+                "required": ["owner", "repo", "title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_list_issues",
+            "description": "List issues in a repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string"},
+                    "repo": {"type": "string"},
+                    "state": {"type": "string", "enum": ["open", "closed", "all"], "default": "open"},
+                    "labels": {"type": "string", "description": "Comma-separated labels"},
+                    "per_page": {"type": "integer", "default": 20},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_get_repo",
+            "description": "Get repository details.",
+            "parameters": {"type": "object", "properties": {"owner": {"type": "string"}, "repo": {"type": "string"}}, "required": ["owner", "repo"]},
+        },
+    },
     {"type": "function", "function": {"name": "github_status", "description": "Check GitHub connection status.", "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {"name": "github_auth_url", "description": "Get OAuth authorization URL for GitHub.", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "github_handle_callback", "description": "Handle OAuth callback with authorization code.", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "github_handle_callback",
+            "description": "Handle OAuth callback with authorization code.",
+            "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+        },
+    },
 ]

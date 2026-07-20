@@ -18,24 +18,26 @@ def _parse_reminders_output(output: str) -> List[dict]:
             continue
         parts = line.split(" ||| ")
         if len(parts) >= 4:
-            reminders.append({
-                "id": parts[0],
-                "name": parts[1],
-                "body": parts[2] if parts[2] != "(no body)" else "",
-                "due_date": parts[3] if parts[3] != "(no due date)" else None,
-                "completed": parts[4] == "true" if len(parts) > 4 else False,
-                "list": parts[5] if len(parts) > 5 else "Reminders",
-            })
+            reminders.append(
+                {
+                    "id": parts[0],
+                    "name": parts[1],
+                    "body": parts[2] if parts[2] != "(no body)" else "",
+                    "due_date": parts[3] if parts[3] != "(no due date)" else None,
+                    "completed": parts[4] == "true" if len(parts) > 4 else False,
+                    "list": parts[5] if len(parts) > 5 else "Reminders",
+                }
+            )
     return reminders
 
 
 def reminders_get_lists() -> str:
-    script = '''
+    script = """
     tell application "Reminders"
         set listNames to name of every list
         return listNames
     end tell
-    '''
+    """
     out, err = _applescript(script)
     if err:
         return f"Error: {err}"
@@ -83,8 +85,8 @@ def reminders_list(list_name: Optional[str] = None, completed: bool = False) -> 
 
     lines = [f"Reminders in '{target_list}' ({'completed' if completed else 'active'}):"]
     for r in reminders:
-        due = f" 📅 {r['due_date']}" if r['due_date'] else ""
-        body = f"\n    {r['body'][:100]}" if r['body'] else ""
+        due = f" 📅 {r['due_date']}" if r["due_date"] else ""
+        body = f"\n    {r['body'][:100]}" if r["body"] else ""
         lines.append(f"  [{r['id']}] {r['name']}{due}{body}")
     return "\n".join(lines)
 
@@ -175,9 +177,9 @@ def reminders_search(query: str) -> str:
 
     lines = [f"Search results for '{query}':"]
     for r in reminders:
-        due = f" 📅 {r['due_date']}" if r['due_date'] else ""
-        status = " ✓" if r['completed'] else ""
-        body = f"\n    {r['body'][:100]}" if r['body'] else ""
+        due = f" 📅 {r['due_date']}" if r["due_date"] else ""
+        status = " ✓" if r["completed"] else ""
+        body = f"\n    {r['body'][:100]}" if r["body"] else ""
         lines.append(f"  [{r['id']}] {r['name']}{due}{status}{body}  (in {r['list']})")
     return "\n".join(lines)
 
@@ -193,9 +195,56 @@ REMINDERS_TOOLS = {
 
 REMINDERS_DEFINITIONS = [
     {"type": "function", "function": {"name": "reminders_get_lists", "description": "List all reminder lists in macOS Reminders app.", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "reminders_list", "description": "List reminders in a list. Defaults to 'Reminders' list.", "parameters": {"type": "object", "properties": {"list_name": {"type": "string", "description": "Name of the reminder list (default: Reminders)"}, "completed": {"type": "boolean", "default": False, "description": "Show completed reminders"}}, "required": []}}},
-    {"type": "function", "function": {"name": "reminders_create", "description": "Create a new reminder.", "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "notes": {"type": "string", "default": ""}, "due_date": {"type": "string", "description": "Due date (e.g., '2024-12-25 10:00' or 'tomorrow 9am')"}, "list_name": {"type": "string", "description": "Reminder list name (default: Reminders)"}}, "required": ["title"]}}},
-    {"type": "function", "function": {"name": "reminders_complete", "description": "Mark a reminder as completed.", "parameters": {"type": "object", "properties": {"reminder_id": {"type": "string"}}, "required": ["reminder_id"]}}},
-    {"type": "function", "function": {"name": "reminders_delete", "description": "Delete a reminder.", "parameters": {"type": "object", "properties": {"reminder_id": {"type": "string"}}, "required": ["reminder_id"]}}},
-    {"type": "function", "function": {"name": "reminders_search", "description": "Search reminders by name or body text.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "reminders_list",
+            "description": "List reminders in a list. Defaults to 'Reminders' list.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "list_name": {"type": "string", "description": "Name of the reminder list (default: Reminders)"},
+                    "completed": {"type": "boolean", "default": False, "description": "Show completed reminders"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reminders_create",
+            "description": "Create a new reminder.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "notes": {"type": "string", "default": ""},
+                    "due_date": {"type": "string", "description": "Due date (e.g., '2024-12-25 10:00' or 'tomorrow 9am')"},
+                    "list_name": {"type": "string", "description": "Reminder list name (default: Reminders)"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reminders_complete",
+            "description": "Mark a reminder as completed.",
+            "parameters": {"type": "object", "properties": {"reminder_id": {"type": "string"}}, "required": ["reminder_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {"name": "reminders_delete", "description": "Delete a reminder.", "parameters": {"type": "object", "properties": {"reminder_id": {"type": "string"}}, "required": ["reminder_id"]}},
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reminders_search",
+            "description": "Search reminders by name or body text.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
 ]

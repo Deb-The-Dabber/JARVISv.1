@@ -16,7 +16,7 @@ class TestXMLParser:
         assert calls == [("open_app", {"app_name": "Finder"})]
 
     def test_multi(self):
-        text = '<tool_name>a</tool_name><tool_args>{}</tool_args><tool_name>b</tool_name><tool_args>{}</tool_args>'
+        text = "<tool_name>a</tool_name><tool_args>{}</tool_args><tool_name>b</tool_name><tool_args>{}</tool_args>"
         assert len(parse_xml_tool_calls(text)) == 2
 
     def test_none(self):
@@ -25,7 +25,7 @@ class TestXMLParser:
         assert parse_xml_tool_calls(None) == []
 
     def test_strip(self):
-        text = 'before<tool_name>x</tool_name><tool_args>{}</tool_args>after'
+        text = "before<tool_name>x</tool_name><tool_args>{}</tool_args>after"
         cleaned = strip_xml_tool_calls(text)
         assert "before" in cleaned
         assert "after" in cleaned
@@ -116,12 +116,12 @@ class TestBareJSONParser:
 
 class TestToolCallTagParser:
     def test_basic(self):
-        text = '<tool_call>function(scan_project_structure)</tool_call>'
+        text = "<tool_call>function(scan_project_structure)</tool_call>"
         calls = parse_tool_call_tags(text)
         assert calls == [("scan_project_structure", {})]
 
     def test_multiline(self):
-        text = '<tool_call>\nfunction(scan_project_structure)\nend function'
+        text = "<tool_call>\nfunction(scan_project_structure)\nend function"
         calls = parse_tool_call_tags(text)
         assert calls == [("scan_project_structure", {})]
 
@@ -136,11 +136,11 @@ class TestToolCallTagParser:
         assert parse_tool_call_tags(None) == []
 
     def test_strip(self):
-        text = 'before<tool_call>function(x)</tool_call>after'
+        text = "before<tool_call>function(x)</tool_call>after"
         assert strip_tool_call_tags(text) == "beforeafter"
 
     def test_strip_multiline(self):
-        text = 'hello\n<tool_call>\nfunction(x)\nend function\nworld'
+        text = "hello\n<tool_call>\nfunction(x)\nend function\nworld"
         cleaned = strip_tool_call_tags(text)
         assert "hello" in cleaned
         assert "world" in cleaned

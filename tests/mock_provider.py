@@ -35,20 +35,27 @@ app = FastAPI(title="Mock Provider Server")
 MOCK_PORT = int(os.getenv("MOCK_PROVIDER_PORT", "8888"))
 
 RATE_LIMITS: dict[str, dict[str, float]] = {
-    "Nemotron Ultra":   {"req_min": 30, "burst": 5,  "tokens_per_min": 10000},
-    "DeepSeek":         {"req_min": 60, "burst": 10, "tokens_per_min": 20000},
-    "Groq":             {"req_min": 1800, "burst": 30, "tokens_per_min": 100000},
-    "Gemini":           {"req_min": 60, "burst": 10, "tokens_per_min": 32000},
-    "Kimi K2":          {"req_min": 30, "burst": 5,  "tokens_per_min": 15000},
-    "NVIDIA NIM":       {"req_min": 30, "burst": 5,  "tokens_per_min": 10000},
-    "OpenRouter":       {"req_min": 100, "burst": 20, "tokens_per_min": 50000},
-    "Pollinations":     {"req_min": 1000, "burst": 100, "tokens_per_min": 200000},
+    "Nemotron Ultra": {"req_min": 30, "burst": 5, "tokens_per_min": 10000},
+    "DeepSeek": {"req_min": 60, "burst": 10, "tokens_per_min": 20000},
+    "Groq": {"req_min": 1800, "burst": 30, "tokens_per_min": 100000},
+    "Gemini": {"req_min": 60, "burst": 10, "tokens_per_min": 32000},
+    "Kimi K2": {"req_min": 30, "burst": 5, "tokens_per_min": 15000},
+    "NVIDIA NIM": {"req_min": 30, "burst": 5, "tokens_per_min": 10000},
+    "OpenRouter": {"req_min": 100, "burst": 20, "tokens_per_min": 50000},
+    "Pollinations": {"req_min": 1000, "burst": 100, "tokens_per_min": 200000},
 }
 
 PROVIDER_NAMES = [
-    "Nemotron Ultra", "DeepSeek", "Groq", "Gemini",
-    "Kimi K2", "NVIDIA NIM", "OpenRouter", "Pollinations",
+    "Nemotron Ultra",
+    "DeepSeek",
+    "Groq",
+    "Gemini",
+    "Kimi K2",
+    "NVIDIA NIM",
+    "OpenRouter",
+    "Pollinations",
 ]
+
 
 def _model_to_provider(model: str) -> str:
     m = model.lower()
@@ -70,7 +77,9 @@ def _model_to_provider(model: str) -> str:
         return "OpenRouter"
     return "Gemini"
 
+
 # ── State ──
+
 
 class TokenBucket:
     def __init__(self, rate: float, burst: float):
@@ -90,6 +99,7 @@ class TokenBucket:
                 self.tokens -= tokens
                 return True
             return False
+
 
 _provider_state: dict[str, dict] = {
     p: {
@@ -162,6 +172,7 @@ def _apply_latency(provider: str):
 
 
 # ── Tool Call Generation ──
+
 
 def _last_user_message(messages: list[dict]) -> str:
     for msg in reversed(messages):
@@ -262,12 +273,9 @@ def _pick_tool(user_msg: str, tools: list[dict]) -> dict | None:
 def _infer_args(tool_name: str, user_msg: str) -> dict:
     args: dict[str, Any] = {}
     if "query" in tool_name or tool_name in ("web_search",):
-        args["query"] = (user_msg
-            .replace("search", "", 1).replace("search web for", "", 1)
-            .replace("search for", "", 1).strip() or user_msg)
+        args["query"] = user_msg.replace("search", "", 1).replace("search web for", "", 1).replace("search for", "", 1).strip() or user_msg
     elif tool_name in ("open_app", "quit_app"):
-        apps = {"safari": "Safari", "chrome": "Chrome", "discord": "Discord",
-                "spotify": "Spotify", "calculator": "Calculator", "terminal": "Terminal"}
+        apps = {"safari": "Safari", "chrome": "Chrome", "discord": "Discord", "spotify": "Spotify", "calculator": "Calculator", "terminal": "Terminal"}
         for k, v in apps.items():
             if k in user_msg.lower():
                 args["app_name"] = v
@@ -314,6 +322,7 @@ def _build_gemini_tool_call(tool_name: str, arguments: dict) -> dict:
 
 # ── Embeddings (deterministic) ──
 
+
 def _embed(text: str, dims: int = 768) -> list[float]:
     h = int(hashlib.md5(text.encode()).hexdigest()[:8], 16)
     rng = np.random.RandomState(h)
@@ -325,6 +334,7 @@ def _embed(text: str, dims: int = 768) -> list[float]:
 
 
 # ── Endpoints ──
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
@@ -458,11 +468,13 @@ async def embeddings(request: Request):
     data = []
     for i, text in enumerate(input_texts):
         vec = _embed(text, dims)
-        data.append({
-            "object": "embedding",
-            "index": i,
-            "embedding": vec,
-        })
+        data.append(
+            {
+                "object": "embedding",
+                "index": i,
+                "embedding": vec,
+            }
+        )
     _record_call(provider, True)
     return {
         "object": "list",
@@ -476,6 +488,7 @@ async def embeddings(request: Request):
 
 
 # ── Control Endpoints ──
+
 
 @app.get("/mock/health/{provider}")
 async def mock_health(provider: str):
@@ -494,10 +507,8 @@ async def mock_health(provider: str):
 async def mock_state():
     def _safe_state(s: dict) -> dict:
         return {k: v for k, v in s.items() if k != "bucket"}
-    return {
-        p: _safe_state(_get_state(p))
-        for p in PROVIDER_NAMES
-    }
+
+    return {p: _safe_state(_get_state(p)) for p in PROVIDER_NAMES}
 
 
 @app.post("/mock/fail/{provider}")
@@ -580,6 +591,7 @@ async def health():
 
 # ── Streaming Support ──
 
+
 async def _stream_text(model: str, text: str):
     """SSE streaming for OpenAI-compatible chat completions."""
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -592,11 +604,13 @@ async def _stream_text(model: str, text: str):
             "object": "chat.completion.chunk",
             "created": created,
             "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"content": word + " "},
-                "finish_reason": "stop" if is_last else None,
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": word + " "},
+                    "finish_reason": "stop" if is_last else None,
+                }
+            ],
         }
         yield f"data: {json.dumps(data)}\n\n"
         await asyncio.sleep(0.05)
@@ -613,7 +627,7 @@ async def _stream_tool_call(model: str, tool_name: str, arguments: str):
     # Yield arguments in chunks
     chunk_size = 10
     for i in range(0, len(arguments), chunk_size):
-        chunk = arguments[i:i + chunk_size]
+        chunk = arguments[i : i + chunk_size]
         yield f"data: {json.dumps({'id': chunk_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'tool_calls': [{'index': 0, 'function': {'arguments': chunk}}]}, 'finish_reason': None}]})}\n\n"
         await asyncio.sleep(0.02)
     yield f"data: {json.dumps({'id': chunk_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]})}\n\n"
@@ -622,17 +636,20 @@ async def _stream_tool_call(model: str, tool_name: str, arguments: str):
 
 # ── Response Builders ──
 
+
 def _openai_text_response(model: str, text: str) -> dict:
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": text},
-            "finish_reason": "stop",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {
             "prompt_tokens": 50,
             "completion_tokens": len(text.split()),
@@ -647,15 +664,17 @@ def _openai_tool_response(model: str, tool_name: str, arguments: str) -> dict:
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [_build_openai_tool_call(tool_name, arguments)],
-            },
-            "finish_reason": "tool_calls",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_build_openai_tool_call(tool_name, arguments)],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
         "usage": {
             "prompt_tokens": 50,
             "completion_tokens": 10,
@@ -666,10 +685,12 @@ def _openai_tool_response(model: str, tool_name: str, arguments: str) -> dict:
 
 def _gemini_text_response(model: str, text: str) -> dict:
     return {
-        "candidates": [{
-            "content": {"role": "model", "parts": [{"text": text}]},
-            "finish_reason": 1,
-        }],
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": text}]},
+                "finish_reason": 1,
+            }
+        ],
         "usageMetadata": {
             "promptTokenCount": 50,
             "candidatesTokenCount": len(text.split()),
@@ -680,13 +701,15 @@ def _gemini_text_response(model: str, text: str) -> dict:
 
 def _gemini_tool_response(model: str, tool_name: str, arguments: dict) -> dict:
     return {
-        "candidates": [{
-            "content": {
-                "role": "model",
-                "parts": [_build_gemini_tool_call(tool_name, arguments)],
-            },
-            "finish_reason": 2,
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [_build_gemini_tool_call(tool_name, arguments)],
+                },
+                "finish_reason": 2,
+            }
+        ],
         "usageMetadata": {
             "promptTokenCount": 50,
             "candidatesTokenCount": 10,
@@ -696,6 +719,7 @@ def _gemini_tool_response(model: str, tool_name: str, arguments: dict) -> dict:
 
 
 # ── Main ──
+
 
 @app.on_event("startup")
 async def startup():

@@ -54,64 +54,50 @@ def init_db():
 
 def _create_run(name: str, params: dict) -> int:
     with _connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO workflow_runs (workflow_name, params, status, started_at) VALUES (?, ?, ?, ?)",
-            (name, json.dumps(params), "running", datetime.datetime.now().isoformat())
-        )
+        cur = conn.execute("INSERT INTO workflow_runs (workflow_name, params, status, started_at) VALUES (?, ?, ?, ?)", (name, json.dumps(params), "running", datetime.datetime.now().isoformat()))
         conn.commit()
         return cur.lastrowid
 
 
 def _finish_run(run_id: int, status: str, result: str = None, error: str = None):
     with _connect() as conn:
-        conn.execute(
-            "UPDATE workflow_runs SET status=?, result=?, error=?, finished_at=? WHERE id=?",
-            (status, result, error, datetime.datetime.now().isoformat(), run_id)
-        )
+        conn.execute("UPDATE workflow_runs SET status=?, result=?, error=?, finished_at=? WHERE id=?", (status, result, error, datetime.datetime.now().isoformat(), run_id))
         conn.commit()
 
 
 def _checkpoint_node(run_id: int, node_id: str, output: str = None, error: str = None):
     status = "error" if error else "done"
     with _connect() as conn:
-        existing = conn.execute(
-            "SELECT id FROM node_runs WHERE run_id=? AND node_id=?",
-            (run_id, node_id)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM node_runs WHERE run_id=? AND node_id=?", (run_id, node_id)).fetchone()
         if existing:
-            conn.execute(
-                "UPDATE node_runs SET status=?, output=?, error=?, finished_at=? WHERE id=?",
-                (status, output, error, datetime.datetime.now().isoformat(), existing[0])
-            )
+            conn.execute("UPDATE node_runs SET status=?, output=?, error=?, finished_at=? WHERE id=?", (status, output, error, datetime.datetime.now().isoformat(), existing[0]))
         else:
             conn.execute(
                 "INSERT INTO node_runs (run_id, node_id, status, output, error, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (run_id, node_id, status, output, error,
-                 datetime.datetime.now().isoformat(), datetime.datetime.now().isoformat())
+                (run_id, node_id, status, output, error, datetime.datetime.now().isoformat(), datetime.datetime.now().isoformat()),
             )
         conn.commit()
 
 
 def _get_latest_checkpoint(run_id: int) -> set[str]:
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT node_id FROM node_runs WHERE run_id=? AND status='done'",
-            (run_id,)
-        ).fetchall()
+        rows = conn.execute("SELECT node_id FROM node_runs WHERE run_id=? AND status='done'", (run_id,)).fetchall()
     return {r[0] for r in rows}
 
 
 def get_run_history(limit: int = 20) -> list[dict]:
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT id, workflow_name, params, status, result, error, started_at, finished_at "
-            "FROM workflow_runs ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
+        rows = conn.execute("SELECT id, workflow_name, params, status, result, error, started_at, finished_at FROM workflow_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [
         {
-            "id": r[0], "workflow": r[1], "params": r[2],
-            "status": r[3], "result": (r[4] or "")[:200],
-            "error": r[5], "started": r[6], "finished": r[7],
+            "id": r[0],
+            "workflow": r[1],
+            "params": r[2],
+            "status": r[3],
+            "result": (r[4] or "")[:200],
+            "error": r[5],
+            "started": r[6],
+            "finished": r[7],
         }
         for r in rows
     ]
@@ -119,25 +105,20 @@ def get_run_history(limit: int = 20) -> list[dict]:
 
 def get_run_detail(run_id: int) -> dict | None:
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT id, workflow_name, params, status, result, error, started_at, finished_at "
-            "FROM workflow_runs WHERE id=?", (run_id,)
-        ).fetchone()
+        row = conn.execute("SELECT id, workflow_name, params, status, result, error, started_at, finished_at FROM workflow_runs WHERE id=?", (run_id,)).fetchone()
         if not row:
             return None
-        nodes = conn.execute(
-            "SELECT node_id, status, output, error, started_at, finished_at "
-            "FROM node_runs WHERE run_id=? ORDER BY id", (run_id,)
-        ).fetchall()
+        nodes = conn.execute("SELECT node_id, status, output, error, started_at, finished_at FROM node_runs WHERE run_id=? ORDER BY id", (run_id,)).fetchall()
     return {
-        "id": row[0], "workflow": row[1], "params": row[2],
-        "status": row[3], "result": row[4], "error": row[5],
-        "started": row[6], "finished": row[7],
-        "nodes": [
-            {"id": n[0], "status": n[1], "output": (n[2] or "")[:300],
-             "error": n[3], "started": n[4], "finished": n[5]}
-            for n in nodes
-        ],
+        "id": row[0],
+        "workflow": row[1],
+        "params": row[2],
+        "status": row[3],
+        "result": row[4],
+        "error": row[5],
+        "started": row[6],
+        "finished": row[7],
+        "nodes": [{"id": n[0], "status": n[1], "output": (n[2] or "")[:300], "error": n[3], "started": n[4], "finished": n[5]} for n in nodes],
     }
 
 
@@ -286,6 +267,7 @@ def _interpolate(text: str, outputs: dict, params: dict) -> str:
             if node_val is not None:
                 return str(node_val)
         return m.group(0)
+
     return re.sub(r"\{([\w.]+)\}", _replace, text)
 
 
@@ -297,9 +279,7 @@ def _resolve_args(args: dict, outputs: dict, params: dict) -> dict:
         elif isinstance(v, dict):
             resolved[k] = _resolve_args(v, outputs, params)
         elif isinstance(v, list):
-            resolved[k] = [_resolve_args(i, outputs, params) if isinstance(i, dict) else
-                           _interpolate(i, outputs, params) if isinstance(i, str) else i
-                           for i in v]
+            resolved[k] = [_resolve_args(i, outputs, params) if isinstance(i, dict) else _interpolate(i, outputs, params) if isinstance(i, str) else i for i in v]
         else:
             resolved[k] = v
     return resolved
@@ -323,6 +303,7 @@ def _execute_node(node: dict, outputs: dict, params: dict) -> str:
     if ntype == "llm":
         prompt = _interpolate(node.get("prompt", ""), outputs, params)
         from brain import ask_with_tools
+
         result = ask_with_tools(prompt)
         return str(result)
 
@@ -360,8 +341,7 @@ def run_workflow(name: str, params: dict = None, run_id: int = None) -> dict:
                 ready.append(n)
 
         if not ready:
-            return {"ok": False, "error": "Circular dependency or unsatisfied deps",
-                    "run_id": run_id}
+            return {"ok": False, "error": "Circular dependency or unsatisfied deps", "run_id": run_id}
 
         for node in ready:
             node_id = node["id"]

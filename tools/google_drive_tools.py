@@ -57,6 +57,7 @@ def _require_drive_auth(func):
             if not tokens:
                 return "Google Drive token expired. Re-run gdrive_auth_url to re-authorize."
         return func(tokens.access_token, *args, **kwargs)
+
     return wrapper
 
 
@@ -188,13 +189,7 @@ def gdrive_get(file_id: str, access_token: str = "") -> str:
     size = f.get("size", "?")
     if size != "?":
         size = f"{int(size) // 1024}KB"
-    return (
-        f"Name: {f.get('name')}\n"
-        f"Type: {f.get('mimeType')}\n"
-        f"Size: {size}\n"
-        f"Modified: {f.get('modifiedTime', '?')}\n"
-        f"Link: {f.get('webViewLink', 'N/A')}"
-    )
+    return f"Name: {f.get('name')}\nType: {f.get('mimeType')}\nSize: {size}\nModified: {f.get('modifiedTime', '?')}\nLink: {f.get('webViewLink', 'N/A')}"
 
 
 @_require_drive_auth
@@ -376,16 +371,98 @@ DRIVE_TOOLS = {
 }
 
 DRIVE_DEFINITIONS = [
-    {"type": "function", "function": {"name": "gdrive_list", "description": "List files/folders in a Google Drive folder.", "parameters": {"type": "object", "properties": {"folder_id": {"type": "string", "description": "Folder ID (default: root)"}, "page_size": {"type": "integer", "description": "Max results (max 100)"}}, "required": []}}},
-    {"type": "function", "function": {"name": "gdrive_search", "description": "Search for files in Google Drive by name.", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query"}, "page_size": {"type": "integer", "default": 50}}, "required": ["query"]}}},
-    {"type": "function", "function": {"name": "gdrive_get", "description": "Get metadata for a specific Drive file.", "parameters": {"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}}},
-    {"type": "function", "function": {"name": "gdrive_download", "description": "Download a file from Google Drive.", "parameters": {"type": "object", "properties": {"file_id": {"type": "string"}, "dest_path": {"type": "string", "description": "Local path (default: ~/Downloads/)"}}, "required": ["file_id"]}}},
-    {"type": "function", "function": {"name": "gdrive_upload", "description": "Upload a local file to Google Drive.", "parameters": {"type": "object", "properties": {"local_path": {"type": "string"}, "folder_id": {"type": "string", "default": "root"}, "name": {"type": "string", "description": "Override filename"}}, "required": ["local_path"]}}},
-    {"type": "function", "function": {"name": "gdrive_create_folder", "description": "Create a folder in Google Drive.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "parent_id": {"type": "string", "default": "root"}}, "required": ["name"]}}},
-    {"type": "function", "function": {"name": "gdrive_share", "description": "Share a Drive file/folder with a user.", "parameters": {"type": "object", "properties": {"file_id": {"type": "string"}, "email": {"type": "string"}, "role": {"type": "string", "enum": ["reader", "writer", "commenter"]}}, "required": ["file_id", "email"]}}},
-    {"type": "function", "function": {"name": "gdrive_move", "description": "Move a file to a different folder.", "parameters": {"type": "object", "properties": {"file_id": {"type": "string"}, "new_parent_id": {"type": "string"}}, "required": ["file_id", "new_parent_id"]}}},
-    {"type": "function", "function": {"name": "gdrive_delete", "description": "Move a Drive file to trash.", "parameters": {"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_list",
+            "description": "List files/folders in a Google Drive folder.",
+            "parameters": {
+                "type": "object",
+                "properties": {"folder_id": {"type": "string", "description": "Folder ID (default: root)"}, "page_size": {"type": "integer", "description": "Max results (max 100)"}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_search",
+            "description": "Search for files in Google Drive by name.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query"}, "page_size": {"type": "integer", "default": 50}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_get",
+            "description": "Get metadata for a specific Drive file.",
+            "parameters": {"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_download",
+            "description": "Download a file from Google Drive.",
+            "parameters": {
+                "type": "object",
+                "properties": {"file_id": {"type": "string"}, "dest_path": {"type": "string", "description": "Local path (default: ~/Downloads/)"}},
+                "required": ["file_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_upload",
+            "description": "Upload a local file to Google Drive.",
+            "parameters": {
+                "type": "object",
+                "properties": {"local_path": {"type": "string"}, "folder_id": {"type": "string", "default": "root"}, "name": {"type": "string", "description": "Override filename"}},
+                "required": ["local_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_create_folder",
+            "description": "Create a folder in Google Drive.",
+            "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "parent_id": {"type": "string", "default": "root"}}, "required": ["name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_share",
+            "description": "Share a Drive file/folder with a user.",
+            "parameters": {
+                "type": "object",
+                "properties": {"file_id": {"type": "string"}, "email": {"type": "string"}, "role": {"type": "string", "enum": ["reader", "writer", "commenter"]}},
+                "required": ["file_id", "email"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_move",
+            "description": "Move a file to a different folder.",
+            "parameters": {"type": "object", "properties": {"file_id": {"type": "string"}, "new_parent_id": {"type": "string"}}, "required": ["file_id", "new_parent_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {"name": "gdrive_delete", "description": "Move a Drive file to trash.", "parameters": {"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}},
+    },
     {"type": "function", "function": {"name": "gdrive_auth_url", "description": "Get OAuth authorization URL for Google Drive.", "parameters": {"type": "object", "properties": {}}}},
-    {"type": "function", "function": {"name": "gdrive_handle_callback", "description": "Handle OAuth callback for Google Drive.", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "gdrive_handle_callback",
+            "description": "Handle OAuth callback for Google Drive.",
+            "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+        },
+    },
     {"type": "function", "function": {"name": "gdrive_status", "description": "Check Google Drive connection status.", "parameters": {"type": "object", "properties": {}}}},
 ]

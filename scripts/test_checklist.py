@@ -22,6 +22,7 @@ errors = 0
 ran = 0
 _server_proc = None
 
+
 def check(name: str, ok: bool, detail: str = ""):
     global errors, ran
     ran += 1
@@ -33,6 +34,7 @@ def check(name: str, ok: bool, detail: str = ""):
         msg += f" — {detail}"
     print(msg)
 
+
 def api_get(path: str) -> dict:
     try:
         resp = urllib.request.urlopen(f"http://localhost:8000{path}", timeout=10)
@@ -40,12 +42,10 @@ def api_get(path: str) -> dict:
     except Exception as e:
         return {"_error": str(e)}
 
+
 def start_server():
     global _server_proc
-    _server_proc = subprocess.Popen(
-        [sys.executable, "server.py"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    _server_proc = subprocess.Popen([sys.executable, "server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for i in range(20):
         try:
             resp = urllib.request.urlopen("http://localhost:8000/health", timeout=3)
@@ -55,6 +55,7 @@ def start_server():
             time.sleep(0.5)
     raise RuntimeError("Server did not start")
 
+
 def stop_server():
     global _server_proc
     if _server_proc:
@@ -62,7 +63,9 @@ def stop_server():
         _server_proc.wait()
         _server_proc = None
 
+
 # ── Test functions ──
+
 
 def test_module_imports():
     modules = [
@@ -82,6 +85,7 @@ def test_module_imports():
             check(f"import {label}", True)
         except Exception as e:
             check(f"import {label}", False, str(e))
+
 
 def test_memory_roundtrip():
     try:
@@ -112,9 +116,11 @@ def test_memory_roundtrip():
     except Exception as e:
         check("memory roundtrip", False, str(e))
 
+
 def test_graph():
     try:
         from graph_memory import extract_entities_relations, get_graph_summary, hybrid_graph_search, search_neighbors
+
         summary = get_graph_summary()
         check("graph summary callable", True)
 
@@ -129,9 +135,11 @@ def test_graph():
     except Exception as e:
         check("graph module", False, str(e))
 
+
 def test_agent():
     try:
         from agent import get_agent, list_agents, spawn_agent, stop_agent
+
         aid = spawn_agent("test automation")
         check("agent spawn", bool(aid))
         agents = list_agents()
@@ -144,17 +152,21 @@ def test_agent():
     except Exception as e:
         check("agent system", False, str(e))
 
+
 def test_learner():
     try:
         from learner import load_learned_tools
+
         tools = load_learned_tools()
         check("learner tools loaded", isinstance(tools, dict))
     except Exception as e:
         check("learner module", False, str(e))
 
+
 def test_perf():
     try:
         from perf_router import get_provider_stats, get_semantic_cache_stats
+
         ps = get_provider_stats()
         check("perf provider stats", isinstance(ps, dict))
         cs = get_semantic_cache_stats()
@@ -162,27 +174,33 @@ def test_perf():
     except Exception as e:
         check("perf module", False, str(e))
 
+
 def test_capabilities():
     try:
         from safety import CAPABILITY_REGISTRY, get_tool_capability
+
         check("capabilities registered", len(CAPABILITY_REGISTRY) > 0, f"{len(CAPABILITY_REGISTRY)}")
         cap = get_tool_capability("run_terminal_command")
         check("capability lookup", cap is not None, str(cap))
     except Exception as e:
         check("capability system", False, str(e))
 
+
 def test_vision():
     try:
         from tools.vision_tools import analyze_image, analyze_video, ocr_document
+
         check("vision analyze_image callable", callable(analyze_image))
         check("vision ocr_document callable", callable(ocr_document))
         check("vision analyze_video callable", callable(analyze_video))
     except Exception as e:
         check("vision module", False, str(e))
 
+
 def test_push():
     try:
         from push_notify import enqueue_message, get_devices, get_pending_messages
+
         devs = get_devices()
         check("push devices", isinstance(devs, list))
         msgs = get_pending_messages()
@@ -193,15 +211,18 @@ def test_push():
     except Exception as e:
         check("push module", False, str(e))
 
+
 def test_eval():
     try:
         from eval_runner import run_eval_suite
+
         report = run_eval_suite(require_no_api=True)
         check("eval suite ran", True)
         check("eval total", report["total"] > 0, f"{report['total']} cases")
         check("eval no errors", report["failed"] == 0, f"{report['failed']} failures")
     except Exception as e:
         check("eval module", False, str(e))
+
 
 def test_api_endpoints():
     endpoints = [
@@ -225,17 +246,20 @@ def test_api_endpoints():
         has_error = "_error" in data
         check(f"api {label}", not has_error, data.get("_error", ""))
 
+
 def test_tool_registry():
     try:
         from tools import TOOL_DEFINITIONS, TOOL_REGISTRY
+
         check("TOOL_REGISTRY populated", len(TOOL_REGISTRY) > 0, f"{len(TOOL_REGISTRY)} tools")
         check("TOOL_DEFINITIONS populated", len(TOOL_DEFINITIONS) > 0, f"{len(TOOL_DEFINITIONS)} defs")
-        check("extract_entities_relations in TOOL_DEFINITIONS",
-              any("extract_entities_relations" in str(d) for d in TOOL_DEFINITIONS))
+        check("extract_entities_relations in TOOL_DEFINITIONS", any("extract_entities_relations" in str(d) for d in TOOL_DEFINITIONS))
     except Exception as e:
         check("tool registry", False, str(e))
 
+
 # ── Main ──
+
 
 def main():
     global errors, ran
@@ -297,6 +321,7 @@ def main():
     else:
         print("ALL CHECKS PASSED")
         sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

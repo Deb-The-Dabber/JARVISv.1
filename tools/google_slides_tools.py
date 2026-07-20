@@ -54,6 +54,7 @@ def _require_slides_auth(func):
             if not tokens:
                 return "Google Slides token expired. Re-authorize."
         return func(tokens.access_token, *args, **kwargs)
+
     return wrapper
 
 
@@ -112,7 +113,7 @@ def slides_get(presentation_id: str, access_token: str = "") -> str:
     summary = [f"Title: {title}", f"Total slides: {len(slides)}"]
     for i, slide in enumerate(slides[:10]):
         elements = len(slide.get("pageElements", []))
-        summary.append(f"  Slide {i+1}: {elements} elements")
+        summary.append(f"  Slide {i + 1}: {elements} elements")
     return "\n".join(summary)
 
 
@@ -145,13 +146,7 @@ def slides_add_slide(presentation_id: str, access_token: str = "") -> str:
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         },
-        json={
-            "requests": [{
-                "createSlide": {
-                    "slideLayoutReference": {"predefinedLayout": "BLANK"}
-                }
-            }]
-        },
+        json={"requests": [{"createSlide": {"slideLayoutReference": {"predefinedLayout": "BLANK"}}}]},
         timeout=15,
     )
     if not response.ok:
@@ -169,12 +164,14 @@ def slides_replace_text(presentation_id: str, old_text: str, new_text: str, acce
             "Content-Type": "application/json",
         },
         json={
-            "requests": [{
-                "replaceAllText": {
-                    "containsText": {"text": old_text, "matchCase": False},
-                    "replaceText": new_text,
+            "requests": [
+                {
+                    "replaceAllText": {
+                        "containsText": {"text": old_text, "matchCase": False},
+                        "replaceText": new_text,
+                    }
                 }
-            }]
+            ]
         },
         timeout=15,
     )
@@ -206,9 +203,7 @@ SLIDES_DEFINITIONS = [
         "description": "Get summary of a Google Slides presentation",
         "parameters": {
             "type": "object",
-            "properties": {
-                "presentation_id": {"type": "string", "description": "Google Slides presentation ID"}
-            },
+            "properties": {"presentation_id": {"type": "string", "description": "Google Slides presentation ID"}},
             "required": ["presentation_id"],
         },
     },
@@ -217,9 +212,7 @@ SLIDES_DEFINITIONS = [
         "description": "Create a new Google Slides presentation",
         "parameters": {
             "type": "object",
-            "properties": {
-                "title": {"type": "string", "description": "Title of the presentation"}
-            },
+            "properties": {"title": {"type": "string", "description": "Title of the presentation"}},
             "required": ["title"],
         },
     },
@@ -228,9 +221,7 @@ SLIDES_DEFINITIONS = [
         "description": "Add a blank slide to a presentation",
         "parameters": {
             "type": "object",
-            "properties": {
-                "presentation_id": {"type": "string", "description": "Google Slides presentation ID"}
-            },
+            "properties": {"presentation_id": {"type": "string", "description": "Google Slides presentation ID"}},
             "required": ["presentation_id"],
         },
     },
@@ -242,7 +233,7 @@ SLIDES_DEFINITIONS = [
             "properties": {
                 "presentation_id": {"type": "string", "description": "Google Slides presentation ID"},
                 "old_text": {"type": "string", "description": "Text to find"},
-                "new_text": {"type": "string", "description": "Replacement text"}
+                "new_text": {"type": "string", "description": "Replacement text"},
             },
             "required": ["presentation_id", "old_text", "new_text"],
         },
@@ -252,9 +243,7 @@ SLIDES_DEFINITIONS = [
         "description": "Search for Google Slides by name (delegates to Drive search)",
         "parameters": {
             "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search query"}
-            },
+            "properties": {"query": {"type": "string", "description": "Search query"}},
             "required": ["query"],
         },
     },

@@ -20,7 +20,7 @@ def read_file(path: str, offset: int = 0) -> str:
         shown = lines[start:end]
         result = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(shown, start=start))
         if len(lines) > end:
-            result += f"\n... truncated: showing lines {start+1}-{end} of {len(lines)}."
+            result += f"\n... truncated: showing lines {start + 1}-{end} of {len(lines)}."
         return result or f"(empty from offset {offset})"
     except Exception as e:
         return f"Could not read file: {e}"
@@ -71,6 +71,7 @@ def list_directory(path: str = "~") -> str:
 def run_python(code: str) -> str:
     """Run Python code in a subprocess with a 30 second timeout."""
     from sandbox import run_sandboxed_python
+
     result = run_sandboxed_python(code, timeout=30)
     parts = [f"Exit code: {result['exit_code']}"]
     stdout = result.get("stdout", "").strip()
@@ -197,12 +198,83 @@ CODE_TOOLS = {
 
 
 CODE_DEFINITIONS = [
-    {"type": "function", "function": {"name": "read_file", "description": "Read a file and return the first 200 numbered lines, with a truncation notice if longer.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Path to the file to read."}, "offset": {"type": "integer", "description": "Line number to start reading from (0-indexed). Use to paginate through large files."}}, "required": ["path"]}}},
-    {"type": "function", "function": {"name": "write_file", "description": "Write content to a file, creating parent directories if needed.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
-    {"type": "function", "function": {"name": "append_file", "description": "Append content to an existing or new file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
-    {"type": "function", "function": {"name": "list_directory", "description": "List visible files and directories with [DIR] and [FILE] prefixes.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Directory to list. Defaults to ~."}}, "required": []}}},
-    {"type": "function", "function": {"name": "run_python", "description": "Run Python code in a subprocess with a 30 second timeout and return stdout, stderr, and exit code.", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}},
-    {"type": "function", "function": {"name": "scan_project_structure", "description": "Walk a project up to 3 levels deep, skipping common dependency/cache directories, and report file sizes and line counts.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Project path. Defaults to ~/Jarvis."}}, "required": []}}},
-    {"type": "function", "function": {"name": "search_in_files", "description": "Search for a query string across files with a matching extension and return up to 20 filename:line matches.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "path": {"type": "string", "description": "Root path to search. Defaults to ~/Jarvis."}, "extension": {"type": "string", "description": "File extension to search. Defaults to .py."}}, "required": ["query"]}}},
-    {"type": "function", "function": {"name": "get_function_signatures", "description": "Use Python AST parsing to list class and function definitions with line numbers.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Python file path to inspect."}}, "required": ["path"]}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file and return the first 200 numbered lines, with a truncation notice if longer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file to read."},
+                    "offset": {"type": "integer", "description": "Line number to start reading from (0-indexed). Use to paginate through large files."},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file, creating parent directories if needed.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_file",
+            "description": "Append content to an existing or new file.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": "List visible files and directories with [DIR] and [FILE] prefixes.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Directory to list. Defaults to ~."}}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_python",
+            "description": "Run Python code in a subprocess with a 30 second timeout and return stdout, stderr, and exit code.",
+            "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "scan_project_structure",
+            "description": "Walk a project up to 3 levels deep, skipping common dependency/cache directories, and report file sizes and line counts.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Project path. Defaults to ~/Jarvis."}}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_in_files",
+            "description": "Search for a query string across files with a matching extension and return up to 20 filename:line matches.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "path": {"type": "string", "description": "Root path to search. Defaults to ~/Jarvis."},
+                    "extension": {"type": "string", "description": "File extension to search. Defaults to .py."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_function_signatures",
+            "description": "Use Python AST parsing to list class and function definitions with line numbers.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Python file path to inspect."}}, "required": ["path"]},
+        },
+    },
 ]

@@ -115,6 +115,7 @@ def diagnose_issue(description: str) -> str:
 
     try:
         from watchlog import get_events_since
+
         events = get_events_since(2)
         errors = [e for e in events if "error" in " ".join(str(x).lower() for x in e)]
         lines.append(f"Recent watchlog errors: {len(errors)}")
@@ -125,6 +126,7 @@ def diagnose_issue(description: str) -> str:
 
     try:
         from safety import get_audit_log
+
         audit = get_audit_log(50)
         blocked = [row for row in audit if row[3] in ("BLOCKED", "DENIED_BY_USER")]
         lines.append(f"Recent blocked/denied actions: {len(blocked)}")
@@ -167,15 +169,13 @@ def diagnose_issue(description: str) -> str:
 def explain_capability(question: str) -> str:
     try:
         from tools import TOOL_REGISTRY
+
         names = sorted(TOOL_REGISTRY.keys())
     except Exception as e:
         return f"Could not inspect tools: {e}"
 
     keywords = _keywords(question)
-    relevant = [
-        name for name in names
-        if any(k in name.lower() for k in keywords)
-    ]
+    relevant = [name for name in names if any(k in name.lower() for k in keywords)]
     if not relevant:
         relevant = names
     lines = [
@@ -237,15 +237,10 @@ def modify_own_tool(tool_file: str, change_description: str, new_code: str) -> s
 
 def get_modification_history() -> str:
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT file, change_description, backup_path, success, created_at FROM self_modifications ORDER BY created_at DESC LIMIT 10"
-        ).fetchall()
+        rows = conn.execute("SELECT file, change_description, backup_path, success, created_at FROM self_modifications ORDER BY created_at DESC LIMIT 10").fetchall()
     if not rows:
         return "No self-modifications logged yet."
-    return "\n".join(
-        f"{created_at}: {'OK' if success else 'FAILED'} {file} — {desc} (backup: {backup or 'none'})"
-        for file, desc, backup, success, created_at in rows
-    )
+    return "\n".join(f"{created_at}: {'OK' if success else 'FAILED'} {file} — {desc} (backup: {backup or 'none'})" for file, desc, backup, success, created_at in rows)
 
 
 SELF_TOOLS = {
@@ -260,13 +255,58 @@ SELF_TOOLS = {
 
 
 SELF_DEFINITIONS = [
-    {"type": "function", "function": {"name": "get_own_source", "description": "Read Jarvis source code for a module and return the first 150 lines.", "parameters": {"type": "object", "properties": {"module_name": {"type": "string"}}, "required": ["module_name"]}}},
-    {"type": "function", "function": {"name": "list_own_modules", "description": "List Jarvis core source files with line counts and sizes.", "parameters": {"type": "object", "properties": {}, "required": []}}},
-    {"type": "function", "function": {"name": "diagnose_issue", "description": "Diagnose a Jarvis issue using logs, audit history, env vars, and relevant source files.", "parameters": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}}},
-    {"type": "function", "function": {"name": "explain_capability", "description": "Explain Jarvis capabilities by inspecting registered tools relevant to a question.", "parameters": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]}}},
-    {"type": "function", "function": {"name": "backup_file", "description": "Create a timestamped backup of a file in ~/jarvis_backups.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
-    {"type": "function", "function": {"name": "modify_own_tool", "description": "Validate, back up, and replace a Jarvis tool/source file with new Python code.", "parameters": {"type": "object", "properties": {"tool_file": {"type": "string"}, "change_description": {"type": "string"}, "new_code": {"type": "string"}}, "required": ["tool_file", "change_description", "new_code"]}}},
-    {"type": "function", "function": {"name": "get_modification_history", "description": "Return the last 10 logged self-modifications.", "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "get_own_source",
+            "description": "Read Jarvis source code for a module and return the first 150 lines.",
+            "parameters": {"type": "object", "properties": {"module_name": {"type": "string"}}, "required": ["module_name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {"name": "list_own_modules", "description": "List Jarvis core source files with line counts and sizes.", "parameters": {"type": "object", "properties": {}, "required": []}},
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "diagnose_issue",
+            "description": "Diagnose a Jarvis issue using logs, audit history, env vars, and relevant source files.",
+            "parameters": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "explain_capability",
+            "description": "Explain Jarvis capabilities by inspecting registered tools relevant to a question.",
+            "parameters": {"type": "object", "properties": {"question": {"type": "string"}}, "required": ["question"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "backup_file",
+            "description": "Create a timestamped backup of a file in ~/jarvis_backups.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "modify_own_tool",
+            "description": "Validate, back up, and replace a Jarvis tool/source file with new Python code.",
+            "parameters": {
+                "type": "object",
+                "properties": {"tool_file": {"type": "string"}, "change_description": {"type": "string"}, "new_code": {"type": "string"}},
+                "required": ["tool_file", "change_description", "new_code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {"name": "get_modification_history", "description": "Return the last 10 logged self-modifications.", "parameters": {"type": "object", "properties": {}, "required": []}},
+    },
 ]
 
 

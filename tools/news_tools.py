@@ -1,4 +1,3 @@
-
 import requests
 
 from config import NEWSAPI_API_KEY
