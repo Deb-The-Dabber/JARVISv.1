@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  JARVIS_TTS_SILENT: "1"
+  JARVIS_MOCK_PROVIDERS: "1"
+  MOCK_PROVIDER_URL: "http://127.0.0.1:18889"
+  MOCK_PROVIDER_PORT: "18889"
+  JARVIS_TESTING: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ruff
+          key: ruff-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ruff-${{ runner.os }}-
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check .
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest python-dotenv
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --tb=short
+
+  regression-mock:
+    runs-on: ubuntu-latest
+    needs: [lint, unit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('ci-requirements.txt') }}
+          restore-keys: |
+            pip-
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ruff
+          key: ruff-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ruff-${{ runner.os }}-
+      - name: Install system deps (Xvfb)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ci-requirements.txt pytest
+      - name: Start Xvfb
+        run: Xvfb :99 -screen 0 1024x768x24 & sleep 2
+      - name: Start mock provider
+        run: |
+          python -m uvicorn tests.mock_provider:app \
+            --host 127.0.0.1 --port 18889 --log-level warning &
+          sleep 3
+          curl -f http://127.0.0.1:18889/health
+      - name: Run regression tests (mock mode)
+        env:
+          DISPLAY: ":99"
+        run: pytest tests/regression/ -m "regression and not local" -v --tb=short
+      - name: Run fallback tests
+        env:
+          DISPLAY: ":99"
+        run: pytest tests/test_provider_fallback.py -v --tb=short
+
+  regression-real:
+    runs-on: ubuntu-latest
+    needs: [lint, unit]
+    if: secrets.GOOGLE_GENAI_API_KEY != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ci-requirements.txt pytest
+      - name: Run regression tests (real providers)
+        env:
+          JARVIS_TTS_SILENT: "1"
+          JARVIS_EVAL_MODE: "1"
+          GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_NEMOTRON_API_KEY: ${{ secrets.NVIDIA_NEMOTRON_API_KEY }}
+          NVIDIA_EMBEDDING_API_KEY: ${{ secrets.NVIDIA_EMBEDDING_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+        run: pytest tests/regression/ -m "regression and not local" -v --tb=short --timeout=600

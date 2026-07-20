@@ -1,0 +1,14 @@
+venv/
+.env
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+smoke_test_report_*.md
+models/
+jarvis_*.db
+jarvis_*.log
+node_modules/
+*.sqlite
+*.ckpt
+*.pt

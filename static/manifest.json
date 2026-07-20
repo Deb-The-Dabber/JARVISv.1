@@ -1,0 +1,16 @@
+{
+  "name": "Jarvis",
+  "short_name": "Jarvis",
+  "description": "Jarvis local AI assistant",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b0f",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "/static/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
