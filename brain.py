@@ -9,6 +9,8 @@ import time
 import requests
 from dotenv import load_dotenv
 
+import action_sandbox
+import file_sandbox
 import learner
 from agent import needs_agent_loop, needs_planner, run_agent_loop, run_planner_loop
 from config import (
@@ -154,6 +156,15 @@ class ConversationContext:
             self.last_problem = text
             self.last_solution = reply
         self.last_intent = intent
+
+    def add_message(self, role: str, content: str):
+        """Inject a system-level note directly into the live conversation history
+        so it actually reaches the model on the next call (not just stored on
+        this context object, which build_system_prompt/get_working_memory never read).
+        """
+        conversation.append({"role": role, "content": content})
+        if role == "system":
+            self.last_solution = content[:200]
 
 
 conversation_context = ConversationContext()
@@ -1311,6 +1322,15 @@ def ask_nemotron_ultra(user_message: str, tool_results: list[str]) -> str:
                 _append_tool_msg(fn_name, fn_args, str(result))
             continue
 
+        # Detect "narrated but not executed" tool calls — model describes an action
+        # instead of emitting the actual tool_call block. Force one more iteration.
+        _narration_pattern = r"\b(let me|i'll|i will|going to|need to)\s+(call|use|check|run)\b"
+        if content and re.search(_narration_pattern, content, re.IGNORECASE) and _nemotron_loop_count < 4:
+            _debug(f"[Nemotron Ultra] Narrated tool call detected, forcing continuation: {content[:80]}")
+            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user", "content": "You said you would call a tool but didn't actually call it. Call it now."})
+            continue
+
         _debug(f"[Nemotron Ultra] Text response ({_nemotron_loop_count} iters): {content[:80]}...")
         return _sanitize_assistant_text(content)
 
@@ -1404,6 +1424,12 @@ def _sanitize_tool_args(fn, raw_args):
     return {k: v for k, v in raw_args.items() if k in allowed}
 
 
+def _print_file_change(path: str, diff: str, ins: int, dels: int):
+    print(f"\n========== [Jarvis Sandbox] Pending change: {path} (+{ins} -{dels}) ==========")
+    print(diff)
+    print("========== Say YES to apply, or NO to discard ==========\n")
+
+
 def _execute_tool(fn_name: str, fn_args: dict) -> str:
     # Track tool names for eval harness / audit
     _tool_call_names.append(fn_name)
@@ -1424,12 +1450,112 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
         return validation
     fn_name, fn_args = validation
 
-    from safety import TOOL_PERMISSIONS, NeedsConfirmation, PermissionDenied, check_permission, log_audit
+    from safety import (
+        TOOL_PERMISSIONS,
+        NeedsConfirmation,
+        PermissionDenied,
+        analyze_command,
+        check_permission,
+        is_session_confirmed,
+        log_audit,
+    )
     from tts import speak as _speak_direct
 
     try:
         safe_args = _sanitize_tool_args(fn, fn_args)
-        check_permission(fn_name, safe_args)
+        _sb_pending = None
+        _sb_gated = False
+        # ── SELF-MODIFICATION → typed review (never auto-proceeds) ──
+        if (
+            action_sandbox.enabled()
+            and not action_sandbox.eval_mode()
+            and action_sandbox.is_selfmod(fn_name, safe_args)
+        ):
+            _sm = action_sandbox.resolve_selfmod(fn_name, safe_args, fn)
+            if _sm["new_code"].strip() != _sm["old_code"].strip():
+                _sm_analysis = action_sandbox.analyze_selfmod(_sm["target"], _sm["old_code"], _sm["new_code"])
+                _sm_dry = action_sandbox.dry_run_code(_sm["new_code"])
+                _sm_diff = file_sandbox.make_diff(_sm["target"], _sm["old_code"], _sm["new_code"])
+                _sm_preview = action_sandbox.format_selfmod_preview(_sm["target"], _sm_analysis, _sm_dry, _sm_diff)
+                print("\n" + _sm_preview)
+                if _sm_analysis["blocked"] or not _sm_dry["ok"]:
+                    _sm_blocked = _sm_analysis["blocked"] or [_sm_dry.get("error", "dry run failed")]
+                    log_audit(fn_name, safe_args, "DANGEROUS", "BLOCKED", "; ".join(_sm_blocked))
+                    return "Self-modification refused by sandbox review: " + "; ".join(_sm_blocked)
+                action_sandbox.stage_typed(
+                    fn_name, fn, safe_args, action_sandbox.confirm_text_for(_sm["target"]), _sm_preview, _sm
+                )
+                raise NeedsConfirmation(
+                    fn_name,
+                    safe_args,
+                    "DANGEROUS",
+                    f"Self-modification of {_sm['target']} is ready. "
+                    f"Type: {action_sandbox.confirm_text_for(_sm['target'])} — or say no to cancel.",
+                )
+            return f"No change needed — {_sm['target']} already matches the requested state."
+        # ── FILE WRITES → unified diff preview ──
+        if fn_name in file_sandbox.WRITE_TOOLS and file_sandbox.enabled() and not file_sandbox.eval_mode():
+            _sb_sim = file_sandbox.simulate(fn_name, safe_args)
+            if _sb_sim:
+                _sb_path, _sb_old, _sb_new = _sb_sim
+                _sb_diff = file_sandbox.make_diff(_sb_path, _sb_old, _sb_new)
+                if _sb_diff:
+                    file_sandbox.stage(fn_name, safe_args, _sb_path, _sb_old, _sb_new, _sb_diff)
+                    _sb_ins, _sb_dels = file_sandbox.counts(_sb_diff)
+                    _print_file_change(_sb_path, _sb_diff, _sb_ins, _sb_dels)
+                    _sb_pending = (_sb_path, _sb_ins, _sb_dels)
+        if action_sandbox.enabled() and not action_sandbox.eval_mode():
+            # ── TERMINAL / PYTHON → real sandboxed run preview ──
+            if fn_name in action_sandbox.EXEC_TOOLS:
+                if fn_name in ("run_terminal_command", "run_command_sandboxed"):
+                    _cmd_ok, _cmd_level, _cmd_reason = analyze_command(safe_args.get("command", ""))
+                    if not _cmd_ok:
+                        log_audit(fn_name, safe_args, "CRITICAL", "BLOCKED", _cmd_reason)
+                        raise PermissionDenied(f"Command blocked: {_cmd_reason}")
+                _sb_exec = action_sandbox.run_exec_preview(fn_name, safe_args)
+                print(
+                    f"\n========== [Jarvis Sandbox] Preview (sandboxed run) ==========\n"
+                    f"{_sb_exec}\n============================================================"
+                )
+                _sb_gated = True
+                if is_session_confirmed(fn_name):
+                    if action_sandbox.auto_proceed(3):
+                        pass
+                    else:
+                        raise NeedsConfirmation(
+                            fn_name, safe_args, "WARNING", "Cancelled — say yes if you change your mind."
+                        )
+                else:
+                    raise NeedsConfirmation(
+                        fn_name, safe_args, "WARNING", action_sandbox.confirm_message(fn_name, safe_args)
+                    )
+            elif fn_name in action_sandbox.INTENT_PREVIEW_TOOLS:
+                _sb_intent = action_sandbox.format_intent_preview(fn_name, safe_args)
+                print(
+                    f"\n========== [Jarvis Sandbox] Intent preview ==========\n"
+                    f"{_sb_intent}\n============================================================"
+                )
+                _sb_gated = True
+                if is_session_confirmed(fn_name):
+                    if action_sandbox.auto_proceed(3):
+                        pass
+                    else:
+                        raise NeedsConfirmation(
+                            fn_name, safe_args, "WARNING", "Cancelled — say yes if you change your mind."
+                        )
+                else:
+                    raise NeedsConfirmation(
+                        fn_name, safe_args, "WARNING", action_sandbox.confirm_message(fn_name, safe_args)
+                    )
+        if _sb_pending:
+            _sb_path, _sb_ins, _sb_dels = _sb_pending
+            _sb_message = (
+                f"Write to {_sb_path} (+{_sb_ins}/-{_sb_dels} lines) awaits your approval "
+                "— say yes to apply, no to cancel."
+            )
+            raise NeedsConfirmation(fn_name, safe_args, "WARNING", _sb_message)
+        if not _sb_gated:
+            check_permission(fn_name, safe_args)
         _debug(f"[TOOL EXECUTE] {fn_name}({safe_args})")
         result = fn(**safe_args)
         log_audit(fn_name, safe_args, TOOL_PERMISSIONS.get(fn_name, "WARNING"), "EXECUTED")
@@ -1872,7 +1998,7 @@ def _ask_openai_compatible(
             "model": model,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 500,
+            "max_tokens": 2000,
             "timeout": 30,
         }
 
@@ -2607,7 +2733,14 @@ def execute_pending_safe():
         mark_session_confirmed(tool)
     log_audit(tool, args, level, "CONFIRMED_BY_USER")
     clear_pending_safe()
+    file_sandbox.clear_pending()
     try:
+        real = action_sandbox.real_executor(tool)
+        if real:
+            return real(
+                args.get("command") or args.get("code", ""),
+                timeout=int(args.get("timeout", 30) or 30),
+            )
         return fn(**args)
     except Exception as e:
         return f"Error: {e}"
@@ -2824,8 +2957,37 @@ def process(text):
         global _last_user_message
         _last_user_message = text
 
+    # Typed confirmation for self-modification (sandbox review)
+    if action_sandbox.has_typed_pending():
+        _tp = action_sandbox.get_typed_pending()
+        if _tp and (t.strip().lower() == _tp.get("confirmation_text", "") or _matches_any(yes_words, t)):
+            _tp_result = action_sandbox.apply_staged_selfmod()
+            action_sandbox.clear_typed_pending()
+            clear_pending_safe()
+            file_sandbox.clear_pending()
+            _debug(f"[Confirm] Self-mod applied: {_tp_result}")
+            reply = ask_with_tools(_last_user_message)
+            if conversation and conversation[-1].get("role") == "assistant":
+                conversation[-1]["content"] = reply
+            return reply
+        if _tp and _matches_any(no_words, t):
+            from safety import log_audit
+
+            log_audit(_tp.get("tool", "modify_own_tool"), _tp.get("args", {}), "DANGEROUS", "DENIED_BY_USER")
+            action_sandbox.clear_typed_pending()
+            clear_pending_safe()
+            file_sandbox.clear_pending()
+            return "Okay, cancelled."
+        return (
+            f"Waiting for typed confirmation. Type: {_tp.get('confirmation_text', '')} "
+            "— or say no to cancel."
+        )
+
     if has_pending_safe():
         if _matches_any(yes_words, t):
+            if action_sandbox.is_selfmod(_pending_safe["tool"], _pending_safe["args"]) and not action_sandbox.has_typed_pending():
+                clear_pending_safe()
+                return "Self-modification needs a typed confirmation — please ask me to make the change again."
             result = execute_pending_safe()
             if result:
                 _debug("[Confirm] Confirmed, continuing with original request")
@@ -2838,6 +3000,8 @@ def process(text):
         elif _matches_any(no_words, t):
             tool = _pending_safe["tool"]
             clear_pending_safe()
+            file_sandbox.clear_pending()
+            action_sandbox.clear_typed_pending()
             from safety import log_audit
 
             log_audit(tool or "unknown", {}, "unknown", "DENIED_BY_USER")
@@ -3090,3 +3254,4 @@ def get_last_tool_calls() -> list[str]:
     """Return unique tool names called in the last process() invocation."""
     seen: set = set()
     return [t for t in _tool_call_names if not (t in seen or seen.add(t))]
+

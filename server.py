@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 import proactive
 from brain import get_conversation_context, get_runtime_status, process
+from event_bus import subscribe, publish
 from brain import init as brain_init
 from config import (
     FACE_SIMILARITY_THRESHOLD,
@@ -77,6 +78,7 @@ class TextResponse(BaseModel):
 
 
 # ── Routes ───────────────────────────────────
+# ── WebSocket Event Stream ───────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def root():
     index_path = os.path.join(static_dir, "index.html")
@@ -314,6 +316,79 @@ def _transcribe_audio(audio_data: bytearray, tmp_files: list) -> str:
         return transcribe_file(wav_path)
     except Exception:
         return ""
+
+# ── Event Stream for Push Notifications ────────────────────────────────────
+# Global set of connected WebSocket clients for event broadcasting.
+_connected_ws_clients: set[WebSocket] = set()
+_ws_lock = threading.Lock()
+_event_loop: asyncio.AbstractEventLoop | None = None
+
+@app.on_event("startup")
+async def _event_bus_startup():
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
+    # Subscribe to internal event bus and forward to WS clients
+    from event_bus import subscribe
+
+    def _forward(payload: dict):
+        # Serialize payload and dispatch to all WS clients
+        if not _event_loop:
+            return
+        msg = json.dumps(payload)
+        async def _send():
+            to_remove = []
+            with _ws_lock:
+                for ws in list(_connected_ws_clients):
+                    try:
+                        await ws.send_text(msg)
+                    except Exception:
+                        to_remove.append(ws)
+            for ws in to_remove:
+                _connected_ws_clients.discard(ws)
+        # Schedule coroutine in the event loop
+        asyncio.run_coroutine_threadsafe(_send(), _event_loop)
+
+    # Forward the main event types we care about
+    for et in ["proactive_alert", "subagent_started", "subagent_progress", "subagent_completed"]:
+        subscribe(et, _forward)
+
+@app.websocket("/ws/events")
+async def ws_events(ws: WebSocket):
+    """WebSocket endpoint for real‑time event push.
+    Clients receive JSON messages for each published event.
+    """
+    await ws.accept()
+    # Register client
+    with _ws_lock:
+        _connected_ws_clients.add(ws)
+    try:
+        # Keep connection alive – client can send ping/pong or simple text.
+        while True:
+            msg = await ws.receive_text()
+            if msg is None:
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        with _ws_lock:
+            _connected_ws_clients.discard(ws)
+
+# REST endpoint for polling fallback (optional)
+@app.get("/events/recent")
+async def get_recent_events(event_type: str = "", limit: int = 20, since: str = ""):
+    """Return recent events for polling clients.
+    * ``event_type`` – filter by type (empty = all)
+    * ``limit`` – max events per type
+    * ``since`` – ISO timestamp; only events after this time are returned
+    """
+    from event_bus import get_all_recent, get_recent
+    if event_type:
+        events = get_recent(event_type, limit)
+        return {"type": event_type, "events": events}
+    else:
+        all_events = get_all_recent(limit_per_type=limit)
+        return {"events": all_events}
+
 
 
 @app.get("/audit")

@@ -70,6 +70,8 @@ Constants in `config.py` (user info, paths, TTLs, models).
 | `proactive.py` | Background monitors → priority engine → spoken alerts |
 | `safety.py` | Tool confirmation/blocking: `SAFE` (auto), `WARNING` (confirm), `DANGEROUS` (confirm), `BLOCKED` (deny) |
 | `vector_memory.py` | ChromaDB with embedding model migration (export/re-embed on dimension change) |
+| `file_sandbox.py` | File-write sandbox: stages create/write/append as diffs, approval before apply |
+| `action_sandbox.py` | Universal action sandbox: previews (sandboxed run / intent), self-mod review, typed confirm |
 | `eval_runner.py` | Eval harness: runs golden set through brain, measures intent/tool/keyword accuracy |
 | `tests/mock_provider.py` | Deterministic mock LLM provider server (8 providers, rate limits, health scoring, fail injection) |
 | `tests/conftest.py` | Pytest fixtures: `has_display`, `api`, `jarvis_server`, `mock_provider`, `mock_api`; `_free_port()`, `_stop_proc()` helpers |
@@ -148,6 +150,13 @@ User → Intent Router → Nemotron Ultra (primary) / DeepSeek (coding) → Fall
 - `/audit` endpoint logs: `ALLOWED` / `EXECUTED` / `DENIED` / `BLOCKED` decisions
 - Confirmation state persists per session
 - File/computer tools (`create_file`, `write_file`, `move_and_click`, etc.) upgraded from `WARNING` to `SAFE`
+- **File sandbox** (`file_sandbox.py`): all writes via `create_file` / `write_file` / `append_file` are staged as diffs and printed to the terminal; the write only happens after the user says yes (or `POST /confirm`). No discards it. View pending diff via `GET /files/pending`. Disable with `JARVIS_FILE_SANDBOX=0`; `JARVIS_EVAL_MODE` bypasses it
+- **Action sandbox** (`action_sandbox.py`, default on): every dangerous action runs in a sandbox FIRST, the outcome is shown, then the user decides whether to proceed for real
+  - Terminal/Python (`run_terminal_command`, `run_python`, `run_python_sandboxed`, `run_command_sandboxed`) → real OS-sandboxed run, output shown (`[Jarvis Sandbox] Preview`). `run_python` / `run_terminal_command` execute **outside** the sandbox after approval; the `*_sandboxed` variants stay sandboxed. Blocked patterns (`rm -rf /` etc.) are rejected before any preview runs
+  - Browser/computer/mail/drive/docs/goals tools → intent preview ("what WOULD happen") before running
+  - First approval per session → later calls preview + auto-proceed after 3s unless cancelled (`auto_proceed`); non-tty (API) auto-proceeds immediately
+  - **Self-modification review** (`modify_own_tool` or writes to protected files — brain.py, safety.py, server.py, tools/ etc.): static analysis (syntax, size delta ≤ 50%, critical symbols like `def process(` must survive), always-on isolated dry run, then **typed confirmation** (`confirm self-modify <file>` in terminal, or `POST /confirm` with that text) — never auto-proceeds. Backup to `/tmp/jarvis_sandbox_backups` (24h), auto-rollback on post-apply failure, tool registry reloaded in place. `JARVIS_PROTECTED_FILES` adds extra protected paths (comma-separated)
+  - View pending: `GET /actions/pending` (`self_mod` / `file_write` / `confirm` types). Disable with `JARVIS_ACTION_SANDBOX=0`; `JARVIS_EVAL_MODE=1` bypasses (set in `tests/conftest.py` for regression fixtures)
 - `/brain/reset` clears pending safe state, conversation history, and context
 
 ## Quick Test

@@ -4,6 +4,7 @@ import queue
 import sqlite3
 import threading
 import time
+from event_bus import publish
 
 DB_PATH = os.path.join(os.path.expanduser("~"), "jarvis_priority.db")
 
@@ -330,6 +331,14 @@ def _process_queue():
                 _last_spoken_time = time.time()
                 with _alert_lock:
                     _current_alert_type = alert_type
+                    # Emit event for push/WebSocket and conversation history
+                    publish("proactive_alert", {
+                        "alert_type": alert_type,
+                        "message": message,
+                        "priority": priority,
+                        "spoken": True,
+                        "timestamp": time.time(),
+                    })
 
                 # Schedule ignore check — if no response in 60s, mark ignored
                 def _check_ignored(atype):

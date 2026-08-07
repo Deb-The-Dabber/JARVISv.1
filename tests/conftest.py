@@ -44,6 +44,9 @@ def jarvis_server():
     _free_port(8000)
     env = os.environ.copy()
     env["JARVIS_TTS_SILENT"] = "1"
+    # Eval mode: auto-confirm tools so regression tests exercise routing, not the
+    # interactive sandbox (sandbox behavior has its own dedicated unit tests).
+    env["JARVIS_EVAL_MODE"] = "1"
     proc = subprocess.Popen(
         ["python", "server.py"],
         env=env,

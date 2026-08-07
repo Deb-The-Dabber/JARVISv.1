@@ -1,8 +1,10 @@
 import json
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
+from event_bus import publish
 
 # ── Goal sanitization: strip bypass/PII before passing to sub-agents ──
 _BYPASS_PATTERNS = re.compile(
@@ -627,6 +629,13 @@ def run_agent_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None, max_it
         )
 
         if step_num % 5 == 0:
+            # Emit progress event for sub‑agent
+            publish("subagent_progress", {
+                "agent_id": agent.id,
+                "step": step_num,
+                "tool": tool_name,
+                "status": "running",
+            })
             agent.checkpoint()
 
     agent.status = "completed"
@@ -639,6 +648,8 @@ def spawn_agent(goal: str, tools: dict = None) -> str:
     goal = _sanitize_goal(goal)
     sub = Agent(goal=goal, tools=tools)
     _register_agent(sub)
+    # Emit sub‑agent started event
+    publish("subagent_started", {"agent_id": sub.id, "goal": goal, "timestamp": time.time()})
     return sub.id
 
 

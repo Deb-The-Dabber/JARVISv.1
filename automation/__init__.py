@@ -1,0 +1,704 @@
+"""
+Automation Engine — core automation workflow engine.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+# ── Enums ──────────────────────────────────────────────
+
+
+class TaskType(Enum):
+    """Types of automation tasks."""
+
+    CODING = "coding"
+    RESEARCH = "research"
+    FILE_OPS = "file_ops"
+    AUTOMATION = "automation"
+    BUILDING = "building"
+    DEBUGGING = "debugging"
+    REFACTORING = "refactoring"
+    GENERAL = "general"
+
+
+class AutomationState(Enum):
+    """States in the automation workflow."""
+
+    INIT = "init"
+    AWAITING_IDE = "awaiting_ide"
+    AWAITING_FOLDER = "awaiting_folder"
+    AWAITING_TASK_DETAILS = "awaiting_task_details"
+    EXECUTING = "executing"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class IDEType(Enum):
+    """Supported IDEs."""
+
+    VSCODE = "vscode"
+    CURSOR = "cursor"
+    PYCHARM = "pycharm"
+    INTELLIJ = "intellij"
+    SUBLIME = "sublime"
+    VIM = "vim"
+    NEOVIM = "neovim"
+    EMACS = "emacs"
+    OTHER = "other"
+
+
+# ── Data Classes ───────────────────────────────────────
+
+
+@dataclass
+class AutomationSession:
+    """Represents an active automation session."""
+
+    session_id: str
+    task_description: str
+    task_type: TaskType
+    state: AutomationState = AutomationState.INIT
+    ide: Optional[IDEType] = None
+    project_folder: Optional[str] = None
+    task_details: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    execution_log: List[Dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "task_description": self.task_description,
+            "task_type": self.task_type.value,
+            "state": self.state.value,
+            "ide": self.ide.value if self.ide else None,
+            "project_folder": self.project_folder,
+            "task_details": self.task_details,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "metadata": self.metadata,
+            "execution_log": self.execution_log,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AutomationSession":
+        session = cls(
+            session_id=data["session_id"],
+            task_description=data["task_description"],
+            task_type=TaskType(data["task_type"]),
+            state=AutomationState(data["state"]),
+            ide=IDEType(data["ide"]) if data.get("ide") else None,
+            project_folder=data.get("project_folder"),
+            task_details=data.get("task_details"),
+            created_at=datetime.fromisoformat(data["created_at"]),
+            updated_at=datetime.fromisoformat(data["updated_at"]),
+            metadata=data.get("metadata", {}),
+            execution_log=data.get("execution_log", []),
+        )
+        return session
+
+
+# ── Automation Engine ──────────────────────────────────
+
+
+class AutomationEngine:
+    """Core automation engine that manages the workflow."""
+
+    def __init__(self):
+        self.current_session: Optional[AutomationSession] = None
+        self._lock = threading.Lock()
+        self._session_file = os.path.expanduser("~/.jarvis/automation_session.json")
+        os.makedirs(os.path.dirname(self._session_file), exist_ok=True)
+        self._load_session()
+
+    def _load_session(self):
+        """Load persisted session from disk."""
+        try:
+            if os.path.exists(self._session_file):
+                with open(self._session_file, "r") as f:
+                    data = json.load(f)
+                self.current_session = AutomationSession.from_dict(data)
+        except Exception:
+            self.current_session = None
+
+    def _save_session(self):
+        """Persist session to disk for resumption."""
+        if self.current_session:
+            self.current_session.updated_at = datetime.now()
+            try:
+                with open(self._session_file, "w") as f:
+                    json.dump(self.current_session.to_dict(), f, indent=2)
+            except Exception:
+                pass
+
+    def _resume_session(self) -> bool:
+        """Resume session from disk if available."""
+        try:
+            if os.path.exists(self._session_file):
+                with open(self._session_file, "r") as f:
+                    data = json.load(f)
+                self.current_session = AutomationSession.from_dict(data)
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _learn_from_failure(self, error: str, context: str) -> str:
+        """
+        Learn from a failure and attempt to self-fix.
+        Records the failure pattern for future reference.
+        """
+        from learner import trigger_learning
+
+        # Trigger the learner to analyze the failure and create a fix
+        learning_result = trigger_learning(
+            trigger=f"Automation failure: {error}",
+            context=f"Task: {self.current_session.task_description if self.current_session else 'Unknown'}\nContext: {context}\nError: {error}",
+        )
+
+        # Also record in session metadata for future reference
+        if self.current_session:
+            if "failures" not in self.current_session.metadata:
+                self.current_session.metadata["failures"] = []
+            self.current_session.metadata["failures"].append({
+                "timestamp": datetime.now().isoformat(),
+                "error": error,
+                "context": context,
+                "learning_result": learning_result,
+            })
+            self._save_session()
+
+        return f"📚 **Learned from failure:**\n{learning_result}\n\nI'll apply this knowledge to avoid similar issues in the future."
+
+    def _auto_fix_code(self, file_path: str, error: str) -> str:
+        """
+        Attempt to auto-fix code based on error message.
+        Uses DeepSeek for code repair.
+        """
+        from brain import ask_deepseek
+        import re
+
+        try:
+            with open(file_path, "r") as f:
+                code = f.read()
+        except Exception as e:
+            return f"❌ Could not read file: {e}"
+
+        prompt = (
+            f"The following code in {file_path} has an error:\n\n"
+            f"```\n{code}\n```\n\n"
+            f"Error: {error}\n\n"
+            f"Please fix the code and return ONLY the corrected code block."
+        )
+
+        try:
+            fixed_code = ask_deepseek(prompt)
+            # Extract code block if present
+            match = re.search(r"```(?:\w+)?\n(.*?)\n```", fixed_code, re.DOTALL)
+            if match:
+                fixed_code = match.group(1).strip()
+
+            # Write the fixed code
+            with open(file_path, "w") as f:
+                f.write(fixed_code)
+
+            return f"✅ **Auto-fixed {file_path}**\n\nThe code has been repaired. Please review the changes."
+        except Exception as e:
+            return f"❌ Auto-fix failed: {e}"
+
+    # ────────────────────────────────────────────────────
+    # Public API
+    # ────────────────────────────────────────────────────
+
+    def start_automation(self, task_description: str) -> str:
+        """Start a new automation session."""
+        with self._lock:
+            if self.current_session and self.current_session.state not in (
+                AutomationState.COMPLETED,
+                AutomationState.FAILED,
+                AutomationState.CANCELLED,
+            ):
+                return f"Already have an active session: {self.current_session.session_id}. Use 'cancel_automation' first."
+
+            # Classify task type
+            task_type = self._classify_task(task_description)
+
+            # Create new session
+            self.current_session = AutomationSession(
+                session_id=uuid.uuid4().hex[:8],
+                task_description=task_description,
+                task_type=TaskType(task_type),
+            )
+
+            # Determine next step based on task type
+            if task_type in (TaskType.CODING, TaskType.BUILDING, TaskType.DEBUGGING, TaskType.REFACTORING):
+                self.current_session.state = AutomationState.AWAITING_IDE
+                self._save_session()
+                return self._prompt_ide_selection()
+            elif task_type == TaskType.FILE_OPS:
+                self.current_session.state = AutomationState.AWAITING_FOLDER
+                self._save_session()
+                return self._prompt_folder_selection()
+            elif task_type == TaskType.RESEARCH:
+                self.current_session.state = AutomationState.AWAITING_TASK_DETAILS
+                self._save_session()
+                return self._prompt_research_details()
+            else:
+                self.current_session.state = AutomationState.AWAITING_TASK_DETAILS
+                self._save_session()
+                return self._prompt_general_details()
+
+    def _classify_task(self, description: str) -> str:
+        """Classify the task type from description."""
+        from agent import score_intent_categories, get_top_intent
+
+        scores = score_intent_categories(description)
+        top_intent, top_score = get_top_intent(description, threshold=3)
+
+        # Map intent categories to task types
+        intent_to_task = {
+            "coding": "coding",
+            "file_ops": "file_ops",
+            "browser": "research",
+            "automation": "automation",
+            "agent_signals": "coding",
+            "research": "research",
+        }
+
+        return intent_to_task.get(top_intent, "general")
+
+    def _prompt_ide_selection(self) -> str:
+        ides = [
+            ("vscode", "VS Code"),
+            ("cursor", "Cursor"),
+            ("pycharm", "PyCharm"),
+            ("intellij", "IntelliJ IDEA"),
+            ("sublime", "Sublime Text"),
+            ("vim", "Vim"),
+            ("neovim", "Neovim"),
+            ("emacs", "Emacs"),
+            ("other", "Other (specify)"),
+        ]
+        ide_list = "\n".join(f"  {i+1}. {name} ({key})" for i, (key, name) in enumerate(ides))
+        return (
+            f"🛠️  **Automation Session Started**\n\n"
+            f"Task: {self.current_session.task_description}\n"
+            f"Type: {self.current_session.task_type.value}\n\n"
+            f"Which IDE are you using?\n{ide_list}\n\n"
+            f"Reply with the number or name (e.g., '1' or 'vscode')."
+        )
+
+    def _prompt_folder_selection(self) -> str:
+        return (
+            f"📁 **Automation Session Started**\n\n"
+            f"Task: {self.current_session.task_description}\n"
+            f"Type: {self.current_session.task_type.value}\n\n"
+            f"What folder should I work in?\n"
+            f"  1. Current working directory\n"
+            f"  2. Home directory (~)\n"
+            f"  3. Desktop\n"
+            f"  4. Documents\n"
+            f"  5. Custom path (specify)\n\n"
+            f"Reply with the number or a custom path."
+        )
+
+    def _prompt_research_details(self) -> str:
+        return (
+            f"🔍 **Research Automation Started**\n\n"
+            f"Task: {self.current_session.task_description}\n\n"
+            f"What specific aspect should I research?\n"
+            f"  - What question(s) should I answer?\n"
+            f"  - What sources should I prefer (docs, blogs, papers, GitHub)?\n"
+            f"  - What depth (overview, deep-dive, code examples)?\n\n"
+            f"Reply with your research requirements."
+        )
+
+    def _prompt_general_details(self) -> str:
+        return (
+            f"⚙️  **Automation Session Started**\n\n"
+            f"Task: {self.current_session.task_description}\n"
+            f"Type: {self.current_session.task_type.value}\n\n"
+            f"What specific steps should I take? Please describe the automation in detail."
+        )
+
+    def _handle_ide_selection(self, response: str) -> str:
+        response_lower = response.lower().strip()
+
+        ide_map = {
+            "1": IDEType.VSCODE, "vscode": IDEType.VSCODE, "code": IDEType.VSCODE,
+            "2": IDEType.CURSOR, "cursor": IDEType.CURSOR,
+            "3": IDEType.PYCHARM, "pycharm": IDEType.PYCHARM,
+            "4": IDEType.INTELLIJ, "intellij": IDEType.INTELLIJ, "idea": IDEType.INTELLIJ,
+            "5": IDEType.SUBLIME, "sublime": IDEType.SUBLIME, "sublime text": IDEType.SUBLIME,
+            "5": IDEType.VIM, "vim": IDEType.VIM,
+            "6": IDEType.NEOVIM, "neovim": IDEType.NEOVIM, "nvim": IDEType.NEOVIM,
+            "7": IDEType.EMACS, "emacs": IDEType.EMACS,
+        }
+
+        ide = None
+        for key, value in ide_map.items():
+            if key in response_lower:
+                ide = value
+                break
+
+        if not ide and "other" in response_lower:
+            return "Please specify which IDE you're using (e.g., 'zed', 'vim', 'emacs', etc.)."
+
+        if not ide:
+            return "I didn't recognize that IDE. Please reply with the number or name (e.g., '1' or 'vscode')."
+
+        self.current_session.ide = ide
+        self.current_session.state = AutomationState.AWAITING_FOLDER
+        self._save_session()
+
+        return self._prompt_folder_selection()
+
+    def _handle_folder_selection(self, response: str) -> str:
+        response_lower = response.lower().strip()
+
+        folder_map = {
+            "1": os.getcwd(),
+            "2": os.path.expanduser("~"),
+            "3": os.path.join(os.path.expanduser("~"), "Desktop"),
+            "4": os.path.join(os.path.expanduser("~"), "Documents"),
+        }
+
+        folder = None
+        if response in folder_map:
+            folder = folder_map[response]
+        elif response_lower in ("5", "custom", "other"):
+            return "Please specify the full path to the folder."
+        else:
+            # Assume it's a custom path
+            folder = os.path.expanduser(response)
+
+        if not folder:
+            return "Please specify a folder (1-5) or provide a custom path."
+
+        if not os.path.exists(folder):
+            return f"Folder doesn't exist: {folder}. Please try again."
+
+        self.current_session.project_folder = folder
+        self.current_session.state = AutomationState.AWAITING_TASK_DETAILS
+        self._save_session()
+
+        return (
+            f"✅ Folder set to: {folder}\n\n"
+            f"Now, what specific task should I perform in this folder?\n"
+            f"Describe the task in detail (e.g., 'create a FastAPI app with auth', "
+            f"'refactor the user module', 'add unit tests for the auth module')."
+        )
+
+    def _handle_task_details(self, response: str) -> str:
+        self.current_session.task_details = response
+        self.current_session.state = AutomationState.EXECUTING
+        self._save_session()
+
+        # Execute the automation
+        return self._execute_automation()
+
+    def _execute_automation(self) -> str:
+        """Execute the automation based on task type."""
+        session = self.current_session
+        task_type = session.task_type
+
+        if task_type == TaskType.CODING:
+            return self._execute_coding_task()
+        elif task_type == TaskType.RESEARCH:
+            return self._execute_research_task()
+        elif task_type == TaskType.FILE_OPS:
+            return self._execute_file_ops()
+        else:
+            session.state = AutomationState.COMPLETED
+            self._save_session()
+            return "Task completed. (Generic automation not yet implemented)"
+
+    def _execute_coding_task(self) -> str:
+        session = self.current_session
+        folder = session.project_folder
+        ide = session.ide
+
+        if not folder:
+            return "❌ No project folder set. Please specify a folder first."
+
+        # Create the project structure based on task details
+        task_details = session.task_details or session.task_description
+
+        return (
+            f"🚀 **Starting Coding Task**\n\n"
+            f"Folder: {session.project_folder}\n"
+            f"IDE: {session.ide.value if session.ide else 'Not specified'}\n"
+            f"Task: {session.task_details or session.task_description}\n\n"
+            f"🔧 I'll start by exploring the project structure and then implement the task.\n\n"
+            f"💡 To continue, I'll need you to confirm or provide more details about the implementation approach.\n"
+            f"What would you like me to do first?\n"
+            f"  1. Explore project structure\n"
+            f"  2. Create project scaffold\n"
+            f"  3. Implement specific feature\n"
+            f"  4. Run tests\n\n"
+            f"Reply with the number or describe your preference."
+        )
+
+    def _execute_research_task(self) -> str:
+        session = self.current_session
+        return (
+            f"🔍 **Starting Research Task**\n\n"
+            f"Topic: {session.task_details or session.task_description}\n\n"
+            f"🔍 I'll research this topic and provide a comprehensive summary with sources.\n\n"
+            f"✅ Research complete! (This is a placeholder - full research automation coming soon.)"
+        )
+
+    def _execute_file_ops(self) -> str:
+        session = self.current_session
+        return (
+            f"📁 **Starting File Operations**\n\n"
+            f"Folder: {session.project_folder}\n"
+            f"Task: {session.task_details or session.task_description}\n\n"
+            f"✅ File operations complete! (This is a placeholder - full file ops automation coming soon.)"
+        )
+
+    def handle_user_response(self, response: str) -> str:
+        """Handle user response to current prompt."""
+        with self._lock:
+            if not self.current_session:
+                return "No active automation session. Use 'start_automation' first."
+
+            state = self.current_session.state
+
+            if state == AutomationState.AWAITING_IDE:
+                return self._handle_ide_selection(response)
+            elif state == AutomationState.AWAITING_FOLDER:
+                return self._handle_folder_selection(response)
+            elif state == AutomationState.AWAITING_TASK_DETAILS:
+                return self._handle_task_details(response)
+            else:
+                return f"Unexpected state: {state.value}"
+
+    def _handle_ide_selection(self, response: str) -> str:
+        response_lower = response.lower().strip()
+
+        ide_map = {
+            "1": IDEType.VSCODE, "vscode": IDEType.VSCODE, "code": IDEType.VSCODE,
+            "2": IDEType.CURSOR, "cursor": IDEType.CURSOR,
+            "3": IDEType.PYCHARM, "pycharm": IDEType.PYCHARM,
+            "4": IDEType.INTELLIJ, "intellij": IDEType.INTELLIJ, "idea": IDEType.INTELLIJ,
+            "5": IDEType.SUBLIME, "sublime": IDEType.SUBLIME, "sublime text": IDEType.SUBLIME,
+            "5": IDEType.VIM, "vim": IDEType.VIM,
+            "6": IDEType.NEOVIM, "neovim": IDEType.NEOVIM, "nvim": IDEType.NEOVIM,
+            "7": IDEType.EMACS, "emacs": IDEType.EMACS,
+        }
+
+        ide = None
+        for key, value in ide_map.items():
+            if key in response_lower:
+                ide = value
+                break
+
+        if not ide and "other" in response_lower:
+            return "Please specify which IDE you're using (e.g., 'zed', 'vim', 'emacs', etc.)."
+
+        if not ide:
+            return "I didn't recognize that IDE. Please reply with the number or name (e.g., '1' or 'vscode')."
+
+        self.current_session.ide = ide
+        self.current_session.state = AutomationState.AWAITING_FOLDER
+        self._save_session()
+
+        return self._prompt_folder_selection()
+
+    def _handle_folder_selection(self, response: str) -> str:
+        response_lower = response.lower().strip()
+
+        folder_map = {
+            "1": os.getcwd(),
+            "2": os.path.expanduser("~"),
+            "3": os.path.join(os.path.expanduser("~"), "Desktop"),
+            "4": os.path.join(os.path.expanduser("~"), "Documents"),
+        }
+
+        folder = None
+        if response in folder_map:
+            folder = folder_map[response]
+        elif response_lower in ("5", "custom", "other"):
+            return "Please specify the full path to the folder."
+        else:
+            # Assume it's a custom path
+            folder = os.path.expanduser(response)
+
+        if not folder:
+            return "Please specify a folder (1-5) or provide a custom path."
+
+        if not os.path.exists(folder):
+            return f"Folder doesn't exist: {folder}. Please try again."
+
+        self.current_session.project_folder = folder
+        self.current_session.state = AutomationState.AWAITING_TASK_DETAILS
+        self._save_session()
+
+        return (
+            f"✅ Folder set to: {folder}\n\n"
+            f"Now, what specific task should I perform in this folder?\n"
+            f"Describe the task in detail (e.g., 'create a FastAPI app with auth', "
+            f"'refactor the user module', 'add unit tests for the auth module')."
+        )
+
+    def _handle_task_details(self, response: str) -> str:
+        self.current_session.task_details = response
+        self.current_session.state = AutomationState.EXECUTING
+        self._save_session()
+
+        # Execute the automation
+        return self._execute_automation()
+
+
+# ── Global Engine Instance ────────────────────────────
+
+_engine: Optional[AutomationEngine] = None
+_engine_lock = threading.Lock()
+
+
+def get_engine() -> AutomationEngine:
+    global _engine
+    with _engine_lock:
+        if _engine is None:
+            _engine = AutomationEngine()
+        return _engine
+
+
+def start_automation(task_description: str) -> str:
+    """Start a new automation session."""
+    engine = get_engine()
+    return engine.start_automation(task_description)
+
+
+def automation_respond(response: str) -> str:
+    """Respond to an automation prompt."""
+    engine = get_engine()
+    return engine.handle_user_response(response)
+
+
+def get_automation_status() -> str:
+    """Get current automation session status."""
+    engine = get_engine()
+    if not engine.current_session:
+        return "No active automation session."
+    session = engine.current_session
+    return (
+        f"Session: {session.session_id}\n"
+        f"State: {session.state.value}\n"
+        f"Task: {session.task_description}\n"
+        f"Type: {session.task_type.value}\n"
+        f"IDE: {session.ide.value if session.ide else 'Not selected'}\n"
+        f"Folder: {session.project_folder or 'Not selected'}"
+    )
+
+
+def cancel_automation() -> str:
+    """Cancel the current automation session."""
+    global _engine
+    with _engine_lock:
+        if _engine and _engine.current_session:
+            session_id = _engine.current_session.session_id
+            _engine.current_session = None
+            try:
+                os.remove(os.path.expanduser("~/.jarvis/automation_session.json"))
+            except Exception:
+                pass
+            return f"Automation session {session_id} cancelled."
+    return "No active automation session to cancel."
+
+
+# ── Tool registration ─────────────────────────────
+AUTOMATION_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "start_automation",
+            "description": "Start a new automation session. Tell JARVIS what you want to automate (coding, research, file ops, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "What you want to automate (e.g., 'build a REST API in VS Code', 'research Python async patterns', 'organize my downloads folder')",
+                    }
+                },
+                "required": ["task_description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "automation_respond",
+            "description": "Respond to an automation prompt (e.g., select IDE number, folder number, or describe code task).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "response": {
+                        "type": "string",
+                        "description": "Your response to the current automation prompt.",
+                    }
+                },
+                "required": ["response"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_automation_status",
+            "description": "Get the current automation session status.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_automation",
+            "description": "Cancel the current automation session.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+]
+
+AUTOMATION_TOOLS = {
+    "start_automation": start_automation,
+    "automation_respond": automation_respond,
+    "get_automation_status": get_automation_status,
+    "cancel_automation": cancel_automation,
+}
+
+__all__ = [
+    "AutomationEngine",
+    "AutomationSession",
+    "TaskType",
+    "AutomationState",
+    "IDEType",
+    "start_automation",
+    "automation_respond",
+    "get_automation_status",
+    "cancel_automation",
+    "AUTOMATION_DEFINITIONS",
+    "AUTOMATION_TOOLS",
+]
