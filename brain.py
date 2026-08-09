@@ -3571,6 +3571,24 @@ def process(text):
                 forget_memory(keyword)
                 return f"Done, forgotten anything related to '{keyword}'."
 
+    # Self-test routing — "test yourself" / "self test" / bug triage commands
+    _self_test_patterns = [
+        r"\btest (yourself|your(?: own)? (code|system|software|self))\b",
+        r"\bself[- ]?test(?:ing)?\b",
+        r"\b(check|look) (yourself|your (?:own )?code|your system) for bugs\b",
+        r"\bfind bugs in (your|the) (code|system)\b",
+        r"\b(?:run|start) (?:a )?self[- ]?test\b",
+        r"\btest (status|progress|report|findings|history|stop|logs)\b",
+        r"\b(confirm|dismiss) (bug|finding|issue) [a-f0-9]{12}\b",
+    ]
+    if any(re.search(p, t) for p in _self_test_patterns):
+        try:
+            from self_test.agent import handle_command
+
+            return handle_command(text)
+        except Exception as _st_err:
+            _debug(f"[Self-Test] routing failed: {_st_err}")
+
     # Explicit summarize command
     if re.search(r"\bsummar(iz|is)e\b.*(conversation|chat|history|discussion)", t) or re.search(
         r"(conversation|chat|history).*\bsummar(iz|is)e\b", t

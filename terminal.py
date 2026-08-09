@@ -33,6 +33,7 @@ from tts import speak, stop_speaking, wait_for_speech
 
 _INPUT_DEVICE_INDEX = None
 _last_alert_ts = time.time()
+_last_self_test_ts = time.time()
 
 
 def _flush_proactive_alerts():
@@ -51,6 +52,26 @@ def _flush_proactive_alerts():
                 print(f"\n  [Alert] {msg}")
         if events:
             _last_alert_ts = events[-1].get("timestamp", 0) or _last_alert_ts
+    except Exception:
+        pass
+
+
+def _flush_self_test_events():
+    """Print self-test progress events that arrived since the last prompt."""
+    global _last_self_test_ts
+    try:
+        from event_bus import get_recent
+
+        events = get_recent("self_test", 10)
+        for ev in events:
+            ts = ev.get("timestamp", 0) or 0
+            if ts <= _last_self_test_ts:
+                continue
+            msg = ev.get("message", "")
+            if msg:
+                print(f"\n  [Self-Test] {msg}")
+        if events:
+            _last_self_test_ts = events[-1].get("timestamp", 0) or _last_self_test_ts
     except Exception:
         pass
 
@@ -146,6 +167,12 @@ def terminal_init():
     proactive.init(speak, process)
     proactive.start()
     triggers_start()
+    try:
+        from self_test.monitor import start as self_test_monitor_start
+
+        self_test_monitor_start()
+    except Exception:
+        pass
 
     print("  Indexing RAG folder...")
     try:
@@ -505,6 +532,7 @@ def main():
         try:
             while True:
                 _flush_proactive_alerts()
+                _flush_self_test_events()
                 time.sleep(0.5)
         except KeyboardInterrupt:
             print("\nGoodbye!")
@@ -519,6 +547,7 @@ def main():
         while True:
             try:
                 _flush_proactive_alerts()
+                _flush_self_test_events()
                 # Mode-specific input handling
                 if _current_mode == InputMode.PASTE:
                     raw_line = input("Paste → ")
@@ -930,6 +959,13 @@ def main():
             elif user_input.lower() in ("/queue clear", "/q clear", "queue clear"):
                 _queue_buffer.clear()
                 print("  Queue cleared.")
+
+            elif user_input.lower() in ("test", "test run", "test logs", "test status", "test report",
+                                        "test findings", "test history", "test stop", "self-test", "selftest") \
+                    or user_input.lower().startswith(("test confirm ", "test dismiss ", "self-test ", "selftest ")):
+                from self_test.agent import handle_command
+
+                print("  " + handle_command(user_input).replace("\n", "\n  "))
 
             else:
                 handle_input(user_input)

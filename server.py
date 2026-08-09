@@ -65,6 +65,12 @@ brain_init()
 proactive.init(speak, process)
 proactive.start()
 triggers_start()
+try:
+    from self_test.monitor import start as self_test_monitor_start
+
+    self_test_monitor_start()
+except Exception:
+    pass
 
 
 # ── Models ───────────────────────────────────
