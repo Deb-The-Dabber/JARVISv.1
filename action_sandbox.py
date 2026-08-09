@@ -30,6 +30,7 @@ import file_sandbox
 JARVIS_ROOT = os.path.dirname(os.path.abspath(__file__))
 BACKUP_DIR = os.path.join(tempfile.gettempdir(), "jarvis_sandbox_backups")
 BACKUP_TTL_SECONDS = 24 * 60 * 60
+SELF_MOD_AUDIT_PATH = os.path.join(os.path.expanduser("~"), ".jarvis", "self_mod_audit.jsonl")
 
 WRITE_TOOLS = {"create_file", "write_file", "append_file"}
 EXEC_TOOLS = {"run_terminal_command", "run_python", "run_python_sandboxed", "run_command_sandboxed"}
@@ -527,13 +528,55 @@ def apply_selfmod(target: str, new_code: str) -> str:
         with open(target, "w", encoding="utf-8") as f:
             f.write(new_code)
     except Exception as e:
+        _log_self_mod_audit(target, backup, f"write_failed: {e}")
         return f"Write failed: {e}"
     dry = dry_run_code(new_code)
     if not dry["ok"]:
         restore_backup(backup, target)
+        _log_self_mod_audit(target, backup, f"rejected_after_apply_rolled_back: {dry['error']}")
         return f"Change rejected after apply — rolled back to backup. Validation: {dry['error']}"
     reload_if_tool_file(target)
+    _log_self_mod_audit(target, backup, "applied")
     return f"Applied to {target}. Backup: {backup}"
+
+
+def _log_self_mod_audit(target: str, backup: str, outcome: str):
+    """Dedicated self-modification audit trail (what JARVIS changed about itself, when, why)."""
+    import datetime
+    import json
+
+    rel = os.path.relpath(_realpath(target), os.path.realpath(JARVIS_ROOT))
+    entry = {
+        "ts": datetime.datetime.now().isoformat(),
+        "target": rel,
+        "backup": backup,
+        "outcome": outcome,
+    }
+    try:
+        os.makedirs(os.path.dirname(SELF_MOD_AUDIT_PATH), exist_ok=True)
+        with open(SELF_MOD_AUDIT_PATH, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+
+def get_self_mod_audit(limit: int = 20) -> list[dict]:
+    """Read the last `limit` self-modification audit entries."""
+    import json
+
+    if not os.path.exists(SELF_MOD_AUDIT_PATH):
+        return []
+    out = []
+    try:
+        with open(SELF_MOD_AUDIT_PATH) as f:
+            for line in f:
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return out[-limit:]
 
 
 def reload_if_tool_file(path: str):

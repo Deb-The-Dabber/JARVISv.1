@@ -192,6 +192,18 @@ def terminal_init():
     except Exception:
         print("  Offline — cloud AI providers unavailable until internet returns.")
 
+    try:
+        from healthcheck import run_healthcheck
+
+        hc = run_healthcheck()
+        if hc["ok"]:
+            print("  Health check: all systems OK")
+        else:
+            fails = [c["name"] for c in hc["checks"] if not c["ok"]]
+            print(f"  Health check: {len(fails)} issue(s): {', '.join(fails)} (type 'health' for details)")
+    except Exception:
+        pass
+
 
 # ─────────────────────────────────────────────
 # RECORD + TRANSCRIBE
@@ -966,6 +978,54 @@ def main():
                 from self_test.agent import handle_command
 
                 print("  " + handle_command(user_input).replace("\n", "\n  "))
+
+            elif user_input.lower() in ("backup", "backup now", "backups", "backup list"):
+                import backup
+
+                if user_input.lower() in ("backup", "backup now"):
+                    print("  Backing up state...")
+                    result = backup.run_backup()
+                    print(f"  Backup: {result['backup_dir']}")
+                    print(f"  Copied: {', '.join(result['copied']) or 'none'}")
+                    if result["skipped"]:
+                        print(f"  Skipped: {', '.join(result['skipped'])}")
+                    if result["pruned"]:
+                        print(f"  Pruned {len(result['pruned'])} old backup(s)")
+                else:
+                    backups = backup.list_backups()
+                    if not backups:
+                        print("  No backups yet. Run 'backup' to create one.")
+                    else:
+                        print(f"  Backups ({len(backups)}):")
+                        for b in backups:
+                            print(f"    {b['name']} ({b['size_bytes'] / 1024:.0f} KB)")
+
+            elif user_input.lower() in ("health", "health check", "status check"):
+                from healthcheck import report_text
+
+                print("  " + report_text().replace("\n", "\n  "))
+
+            elif user_input.lower() in ("selfmod log", "self-mod log", "audit selfmod", "selfmod audit"):
+                from action_sandbox import get_self_mod_audit
+
+                entries = get_self_mod_audit(limit=20)
+                if not entries:
+                    print("  No self-modifications recorded yet.")
+                else:
+                    print(f"  Self-modification audit ({len(entries)}):")
+                    for e in entries:
+                        print(f"    [{e['ts'][:19]}] {e['target']} → {e['outcome']}")
+
+            elif user_input.lower().startswith("memory prune") or user_input.lower().startswith("prune memory"):
+                from memory import prune_old_memories
+
+                parts = user_input.split()
+                days = 30
+                for p in parts:
+                    if p.isdigit():
+                        days = int(p)
+                print(f"  Pruning memories older than {days} days...")
+                prune_old_memories(days=days)
 
             else:
                 handle_input(user_input)

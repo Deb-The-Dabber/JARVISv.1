@@ -101,7 +101,10 @@ async def manifest():
 
 @app.get("/health")
 async def health():
-    return {"status": "online", "message": "Jarvis is running.", "runtime": get_runtime_status()}
+    from healthcheck import run_healthcheck
+
+    hc = run_healthcheck()
+    return {"status": "online", "message": "Jarvis is running.", "runtime": get_runtime_status(), "checks": hc}
 
 
 @app.get("/health/providers")

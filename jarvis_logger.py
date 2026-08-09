@@ -6,6 +6,7 @@ import uuid
 
 LOG_DIR = os.path.expanduser("~/.jarvis/logs")
 LOG_FILE = os.path.join(LOG_DIR, "jarvis.jsonl")
+COST_DAILY_FILE = os.path.join(os.path.expanduser("~/.jarvis"), "cost_daily.jsonl")
 
 _metrics_lock = threading.Lock()
 # All metric keys must be pre-declared here
@@ -155,6 +156,55 @@ def _track_cost(provider: str, tokens_input: int, tokens_output: int):
         _cost_totals["cost_usd_total"] += cost
         by_prov = _cost_totals.setdefault("cost_by_provider", {})
         by_prov[provider] = by_prov.get(provider, 0.0) + cost
+    record_daily_cost(datetime.date.today().isoformat(), cost)
+
+
+def record_daily_cost(date_str: str, cost: float):
+    """Persist a cost amount for a day (survives restarts; used for budget guardrails)."""
+    try:
+        os.makedirs(os.path.dirname(COST_DAILY_FILE), exist_ok=True)
+        with open(COST_DAILY_FILE, "a") as f:
+            f.write(json.dumps({"date": date_str, "cost": round(cost, 6)}) + "\n")
+    except OSError:
+        pass
+
+
+def get_daily_cost(date_str: str | None = None) -> float:
+    """Sum of recorded cost for a date (default: today)."""
+    date_str = date_str or datetime.date.today().isoformat()
+    total = 0.0
+    try:
+        with open(COST_DAILY_FILE) as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if e.get("date") == date_str:
+                    total += float(e.get("cost", 0))
+    except OSError:
+        pass
+    return total
+
+
+def get_cost_by_day(days: int = 30) -> dict:
+    """Cost per day over the last `days` (useful for trend views)."""
+    totals: dict[str, float] = {}
+    try:
+        with open(COST_DAILY_FILE) as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                d = e.get("date", "")
+                if d:
+                    totals[d] = totals.get(d, 0.0) + float(e.get("cost", 0))
+    except OSError:
+        pass
+    today = datetime.date.today()
+    cutoff = today - datetime.timedelta(days=days)
+    return {d: round(c, 4) for d, c in sorted(totals.items()) if d >= cutoff.isoformat()}
 
 
 def get_cost_summary() -> dict:

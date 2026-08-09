@@ -60,6 +60,7 @@ JARVIS_LOCAL_ENABLED = os.getenv("JARVIS_LOCAL_ENABLED", "1") == "1"
 JARVIS_EVAL_MODE = os.getenv("JARVIS_EVAL_MODE", "0") == "1"
 JARVIS_LOCAL_INTENT_ENABLED = os.getenv("JARVIS_LOCAL_INTENT_ENABLED", "1") == "1"
 JARVIS_LOCAL_INTENT_CONFIDENCE = float(os.getenv("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85"))
+JARVIS_DAILY_BUDGET_USD = float(os.getenv("JARVIS_DAILY_BUDGET_USD", "0"))
 
 _LOCAL_INTENT_THRESHOLDS = {
     intent: float(os.getenv(f"JARVIS_LOCAL_INTENT_CONFIDENCE_{intent.upper()}", str(JARVIS_LOCAL_INTENT_CONFIDENCE)))
@@ -70,6 +71,42 @@ _LOCAL_INTENT_THRESHOLDS = {
 def _local_intent_threshold(intent: str) -> float:
     """Per-intent confidence gate; falls back to the global JARVIS_LOCAL_INTENT_CONFIDENCE."""
     return _LOCAL_INTENT_THRESHOLDS.get(intent, JARVIS_LOCAL_INTENT_CONFIDENCE)
+
+
+_budget_warned = False
+
+
+def _daily_budget_exceeded() -> tuple[bool, float, float]:
+    """Check the daily cloud-LLM budget (JARVIS_DAILY_BUDGET_USD; 0 = unlimited)."""
+    global _budget_warned
+    if JARVIS_DAILY_BUDGET_USD <= 0:
+        return False, 0.0, 0.0
+    try:
+        from jarvis_logger import get_daily_cost
+
+        spent = get_daily_cost()
+    except Exception:
+        return False, 0.0, 0.0
+    exceeded = spent >= JARVIS_DAILY_BUDGET_USD
+    if exceeded and not _budget_warned:
+        _budget_warned = True
+        try:
+            from event_bus import publish
+
+            publish(
+                "self_test",
+                {
+                    "timestamp": time.time(),
+                    "message": (
+                        f"Daily AI budget exhausted (${spent:.2f} of ${JARVIS_DAILY_BUDGET_USD:.2f}). "
+                        "Cloud calls suspended until tomorrow."
+                    ),
+                    "phase": "budget",
+                },
+            )
+        except Exception:
+            pass
+    return exceeded, spent, JARVIS_DAILY_BUDGET_USD
 
 GEMINI_TOOL_MODEL = "gemini-2.5-flash"
 GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"]
@@ -3046,6 +3083,27 @@ def ask_with_tools(user_message: str) -> str:
     if not _internet_available():
         return "No internet connection. Cloud AI providers require internet access."
 
+    # ── Daily cost budget guardrail (JARVIS_DAILY_BUDGET_USD; 0 = unlimited) ──
+    _budget_hit, _spent, _limit = _daily_budget_exceeded()
+    if _budget_hit:
+        try:
+            from local_provider import is_available, ask_local
+
+            if is_available():
+                reply = ask_local(user_message)
+                if reply:
+                    _debug("[Budget] Local reply (budget exhausted)")
+                    _last_provider_used = "local_mlx"
+                    _last_model_used = "local"
+                    return reply
+        except Exception:
+            pass
+        return (
+            f"Daily AI budget exhausted (${_spent:.2f} of ${_limit:.2f}). "
+            "I've paused cloud AI calls until tomorrow — set JARVIS_DAILY_BUDGET_USD "
+            "higher (or 0 to disable) if you want to keep going."
+        )
+
     if intent == "chat":
         try:
             from perf_router import semantic_cache_get
@@ -3588,6 +3646,40 @@ def process(text):
             return handle_command(text)
         except Exception as _st_err:
             _debug(f"[Self-Test] routing failed: {_st_err}")
+
+    # Ops routing — backup / health check / memory prune (chat-accessible)
+    if re.search(r"\bbackup\b", t) and re.search(r"\b(run|take|make|do|create|new)\b", t) \
+            or t in ("backup", "backup now"):
+        try:
+            import backup
+
+            result = backup.run_backup()
+            return (
+                f"Backup saved to {result['backup_dir']}. "
+                f"Copied: {', '.join(result['copied']) or 'nothing'}."
+                + (f" Skipped: {', '.join(result['skipped'])}." if result["skipped"] else "")
+            )
+        except Exception as _bk_err:
+            _debug(f"[Ops] backup failed: {_bk_err}")
+
+    if re.search(r"\bhealth\s*check\b", t) or t in ("health status", "how is your health"):
+        try:
+            from healthcheck import report_text
+
+            return report_text()
+        except Exception as _hc_err:
+            _debug(f"[Ops] health check failed: {_hc_err}")
+
+    if re.search(r"\bprune (old |stale )?(memor(y|ies))\b", t):
+        try:
+            from memory import prune_old_memories
+
+            m = re.search(r"(\d+)\s*days", t)
+            days = int(m.group(1)) if m else 30
+            prune_old_memories(days=days)
+            return f"Pruned memories older than {days} days."
+        except Exception as _pr_err:
+            _debug(f"[Ops] memory prune failed: {_pr_err}")
 
     # Explicit summarize command
     if re.search(r"\bsummar(iz|is)e\b.*(conversation|chat|history|discussion)", t) or re.search(
