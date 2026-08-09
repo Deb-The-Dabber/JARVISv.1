@@ -526,6 +526,16 @@ def prewarm_minilm():
         print(f"  Failed to pre-warm MiniLM: {e}")
 
 
+def get_local_embedding_model():
+    """Return the shared all-MiniLM-L6-v2 embedder (loading it on first use)."""
+    global _local_embedding_model
+    if _local_embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+
+        _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _local_embedding_model
+
+
 # Initialize in background so startup isn't blocked
 def _init_background():
     try:

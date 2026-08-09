@@ -1,14 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
-import { Canvas } from '@react-three/fiber'
-import { Orb } from './components/Orb/Orb'
-import { Waveform } from './components/Voice/Waveform'
+import { useEffect } from 'react'
+
 import { useAppStore } from './stores/useAppStore'
 import { useAuthStore } from './stores/useAuthStore'
 import { OrbContainer } from './components/Orb/OrbContainer'
-import { SystemMonitor } from './components/Panels/SystemMonitor'
-import { ActivityFeed } from './components/Panels/ActivityFeed'
-import { MemoryPanel } from './components/Panels/MemoryPanel'
-import { ProviderHealth } from './components/Panels/ProviderHealth'
+
 import { RemoteControl } from './components/Panels/RemoteControl'
 import { FaceUnlock } from './components/Panels/FaceUnlock'
 import { ScreenPreview } from './components/Panels/ScreenPreview'
@@ -20,16 +15,35 @@ import { LeftSidebar } from './components/Layout/LeftSidebar'
 import { RightSidebar } from './components/Layout/RightSidebar'
 import { Footer } from './components/Layout/Footer'
 import { useWebSocket } from './hooks/useWebSocket'
-import { useAudio } from './hooks/useAudio'
 
 function App() {
-  const { fallbackMode, setFallbackMode } = useAppStore()
+  const { addActivity } = useAppStore()
   const { isAuthenticated } = useAuthStore()
   // Initialize WebSocket connection (hook runs its own effect)
   useWebSocket()
 
-  // Optionally manage a local ready flag if needed
-  const [wsReady, setWsReady] = useState(false)
+  useEffect(() => {
+    if (useAppStore.getState().activities.some((a) => a.id.startsWith('init-'))) return;
+    const now = new Date().toISOString()
+    addActivity({ id: 'init-1', time: now, text: 'All systems nominal', type: 'success' })
+    addActivity({ id: 'init-2', time: now, text: 'Command center online · Safety v1.0 active', type: 'info' })
+    addActivity({ id: 'init-3', time: now, text: 'Jarvis initializing...', type: 'info' })
+  }, [addActivity])
+
+  // Handle chat replies over WebSocket
+  useEffect(() => {
+    const onReply = (e: Event) => {
+      const msg = (e as CustomEvent).detail
+      const text = msg.reply || msg.text || msg.content || ''
+      if (text) {
+        const replyEl = document.getElementById('reply')
+        if (replyEl) replyEl.textContent = text
+        addActivity({ id: crypto.randomUUID(), time: new Date().toISOString(), text: `🤖 ${text.slice(0, 120)}`, type: 'success' })
+      }
+    }
+    window.addEventListener('jarvis-reply', onReply)
+    return () => window.removeEventListener('jarvis-reply', onReply)
+  }, [addActivity])
 
   // Keep the existing effect for auth‑related logic (now minimal)
   useEffect(() => {

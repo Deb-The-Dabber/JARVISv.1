@@ -3,6 +3,7 @@ import re
 import threading
 import time
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 from event_bus import publish
 
@@ -203,6 +204,8 @@ def _generate_final_answer(plan: Plan, ask_llm_fn) -> str:
 
 
 def run_planner_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None) -> str:
+    # Record start time for duration metrics
+    start_time = time.time()
     """Think → Act → Evaluate loop with separate planner agent."""
 
     if speak_fn:
@@ -278,6 +281,18 @@ def run_planner_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None) -> s
     # Synthesize final answer
     plan.status = "completed"
     plan.final_answer = _generate_final_answer(plan, ask_llm_fn)
+    # Emit planner completed event
+    publish("subagent_completed", {
+        "agent_id": "planner",  # identifier for planner
+        "goal": goal,
+        "final_answer": plan.final_answer,
+        "steps": [
+            {"tool": s.tool_hint, "status": "success" if s.evaluation == "success" else "failed"}
+            for s in plan.steps
+        ],
+        "duration": time.time() - start_time,
+        "timestamp": time.time(),
+    })
     return plan.final_answer
 
 
@@ -362,8 +377,41 @@ def _is_success_result(tool_name: str, result: str) -> bool:
     return bool(r.strip())
 
 
-_agent_store: dict[str, dict] = {}
+_agent_store: dict[str, "Agent"] = {}
 _store_lock = threading.Lock()
+AGENTS_DB = Path.home() / ".jarvis" / "agents.json"
+
+
+def _save_agents():
+    """Persist agent store to JSON file."""
+    try:
+        AGENTS_DB.parent.mkdir(parents=True, exist_ok=True)
+        with _store_lock:
+            data = {aid: a.to_dict() for aid, a in _agent_store.items()}
+        with open(AGENTS_DB, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+def _load_agents():
+    """Load agent store from JSON file on startup."""
+    if not AGENTS_DB.exists():
+        return
+    try:
+        with open(AGENTS_DB, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        with _store_lock:
+            for aid, adict in data.items():
+                # Create a minimal Agent-like object with just the dict data
+                # We store as dict since full Agent reconstruction needs tools/execute_fn
+                _agent_store[aid] = adict
+    except Exception:
+        pass
+
+
+# Load persisted agents on module import
+_load_agents()
 
 
 class Agent:
@@ -411,22 +459,34 @@ class Agent:
 def _register_agent(a: Agent):
     with _store_lock:
         _agent_store[a.id] = a
+    _save_agents()
 
 
-def get_agent(agent_id: str) -> Agent | None:
+def get_agent(agent_id: str) -> Agent | dict | None:
     with _store_lock:
         return _agent_store.get(agent_id)
 
 
 def list_agents() -> list[dict]:
     with _store_lock:
-        return [a.to_dict() for a in _agent_store.values()]
+        result = []
+        for a in _agent_store.values():
+            if hasattr(a, 'to_dict'):
+                result.append(a.to_dict())
+            elif isinstance(a, dict):
+                result.append(a)
+        return result
 
 
 def stop_agent(agent_id: str) -> bool:
     with _store_lock:
         if agent_id in _agent_store:
-            _agent_store[agent_id].status = "stopped"
+            agent = _agent_store[agent_id]
+            if hasattr(agent, 'status'):
+                agent.status = "stopped"
+            elif isinstance(agent, dict):
+                agent["status"] = "stopped"
+            _save_agents()
             return True
         return False
 
@@ -516,6 +576,8 @@ def _canonical_args_key(args: dict) -> str:
 
 
 def run_agent_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None, max_iterations: int = 30) -> str:
+    # Record start time for duration metrics
+    start_time = time.time()
     agent = Agent(goal=goal, max_iterations=max_iterations)
     _register_agent(agent)
 
@@ -641,6 +703,18 @@ def run_agent_loop(goal: str, execute_tool_fn, ask_llm_fn, speak_fn=None, max_it
     agent.status = "completed"
     agent.final_answer = _synthesize_from_steps(goal, agent.steps)
     agent.checkpoint()
+    # Emit sub‑agent completed event with summary
+    publish("subagent_completed", {
+        "agent_id": agent.id,
+        "goal": goal,
+        "final_answer": agent.final_answer,
+        "steps": [
+            {"tool": s.get("tool"), "status": "success" if s.get("success") else "failed"}
+            for s in agent.steps
+        ],
+        "duration": time.time() - start_time,
+        "timestamp": time.time(),
+    })
     return agent.final_answer
 
 

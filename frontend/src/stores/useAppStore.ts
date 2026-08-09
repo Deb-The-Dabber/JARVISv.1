@@ -101,6 +101,15 @@ export const useAppStore = create<AppState>()(
       {
         name: 'jarvis-app',
         partialize: (s) => ({ activities: s.activities.slice(0, 10) }),
+        merge: (persisted, current) => {
+          const p = persisted as any;
+          if (p && Array.isArray(p.state?.activities)) {
+            p.state.activities = p.state.activities.filter(
+              (a: any) => !String(a.id).startsWith('init-')
+            );
+          }
+          return { ...current, ...(p?.state ?? {}) };
+        },
       }
     )
   )

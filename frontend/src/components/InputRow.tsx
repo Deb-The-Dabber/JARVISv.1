@@ -1,29 +1,59 @@
 import { useState } from 'react';
 import { useStore } from '../stores/useAppStore';
-import { useAuthStore } from '../stores/useAuthStore';
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export function InputRow() {
   const [text, setText] = useState('');
-  const { fallbackMode, setFallbackMode } = useStore();
-  const { isAuthenticated } = useAuthStore();
+  const { setOrbState, addActivity } = useStore();
+
+  const setReply = (reply: string) => {
+    const el = document.getElementById('reply');
+    if (el) el.textContent = reply;
+  };
 
   const handleSend = async () => {
     const trimmed = text.trim();
     if (!trimmed) return;
     setText('');
+
     const lower = trimmed.toLowerCase();
     const yesWords = ['yes', 'yeah', 'go ahead', 'confirm', 'sure', 'ok', 'approved'];
     const noWords = ['no', 'cancel', 'stop', 'nevermind', 'deny'];
 
     if (yesWords.some((w) => lower.includes(w))) {
-      window.dispatchEvent(new CustomEvent('jarvis-confirm', { detail: true }));
+      addActivity({ id: crypto.randomUUID(), time: new Date().toISOString(), text: '✅ Confirmed by user', type: 'success' });
       return;
     }
     if (noWords.some((w) => lower.includes(w))) {
-      window.dispatchEvent(new CustomEvent('jarvis-confirm', { detail: false }));
+      addActivity({ id: crypto.randomUUID(), time: new Date().toISOString(), text: '🚫 Cancelled by user', type: 'warning' });
       return;
     }
-    window.dispatchEvent(new CustomEvent('jarvis-text', { detail: trimmed }));
+
+    addActivity({ id: crypto.randomUUID(), time: new Date().toISOString(), text: `You: ${trimmed}`, type: 'info' });
+    setOrbState('thinking');
+    setReply('Processing...');
+
+    try {
+      const ttsOnPhone = (document.getElementById('ttsClientToggle') as HTMLInputElement)?.checked;
+      const res = await fetch(`${API}/ask${ttsOnPhone ? '?tts=client' : ''}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: trimmed }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setReply(data.reply || '');
+      if (data.reply) {
+        addActivity({ id: crypto.randomUUID(), time: new Date().toISOString(), text: `🤖 ${data.reply.slice(0, 120)}`, type: 'success' });
+      }
+      setOrbState('speaking');
+      setTimeout(() => setOrbState('idle'), 3000);
+    } catch (e) {
+      setReply('Error — is Jarvis running?');
+      addActivity({ id: crypto.randomUUID(), time: new Date().toISOString(), text: 'Error — is Jarvis running?', type: 'error' });
+      setOrbState('idle');
+    }
   };
 
   return (
@@ -55,7 +85,7 @@ export function InputRow() {
           color: 'var(--fg-dim)',
         }}
       >
-        <input type="checkbox" id="ttsClientToggle" checked />
+        <input type="checkbox" id="ttsClientToggle" defaultChecked />
         <label htmlFor="ttsClientToggle">📱 TTS on this device</label>
         <span id="ttsStatus" style={{ marginLeft: 'auto', fontSize: '0.7rem' }}></span>
       </div>

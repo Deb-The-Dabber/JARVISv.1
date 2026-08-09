@@ -534,6 +534,8 @@ async def metrics_endpoint():
     ]
     for prov, avg in m.get("latency_avg_by_provider", {}).items():
         lines.append(f'jarvis_latency_seconds{{provider="{prov}"}} {avg}')
+    for intent, count in sorted(m.get("requests_by_intent", {}).items()):
+        lines.append(f'jarvis_requests_by_intent{{intent="{intent}"}} {count}')
     lines.append("")
     lines.append("# HELP jarvis_cost_usd_total Estimated total API cost (USD)")
     lines.append("# TYPE jarvis_cost_usd_total counter")
@@ -543,6 +545,27 @@ async def metrics_endpoint():
     lines.append("# TYPE jarvis_cost_usd_monthly gauge")
     lines.append(f"jarvis_cost_usd_monthly {c.get('estimated_monthly', 0):.4f}")
     return "\n".join(lines) + "\n"
+
+
+@app.get("/intents")
+async def intents_endpoint():
+    from jarvis_logger import count_intents, get_metrics_snapshot
+
+    persisted = count_intents()
+    snapshot = get_metrics_snapshot().get("requests_by_intent", {})
+    intents = sorted(set(persisted) | set(snapshot))
+    return {
+        "intents": [
+            {
+                "intent": name,
+                "count": persisted.get(name, snapshot.get(name, 0)),
+                "session_count": snapshot.get(name, 0),
+                "persisted": name in persisted,
+            }
+            for name in intents
+        ],
+        "total": sum(persisted.values()),
+    }
 
 
 @app.get("/recap")

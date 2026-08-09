@@ -211,6 +211,29 @@ RECENT_MESSAGE_TTL = 120  # seconds — skip same message within this window
 MIN_SECONDS_BETWEEN_ALERTS = 30  # Never fire more than 1 alert per 30s
 
 
+def _llm_should_notify(alert_type: str, message: str) -> bool:
+    """LLM‑first relevance check: should this alert be spoken now?
+    Returns True (notify) if the LLM is unavailable, disabled, or errors —
+    i.e. falls back to the existing threshold‑based behavior.
+    """
+    try:
+        from brain import _llm_choose
+
+        prompt = (
+            "Jarvis detected an alert for the user. Should it be spoken aloud RIGHT NOW, "
+            "or is it low‑value noise that can wait? Consider urgency, actionability, and "
+            "whether the user needs immediate attention. Respond with ONLY 'yes' or 'no'.\n\n"
+            f"Alert type: {alert_type}\n"
+            f"Alert message: {message}\n"
+        )
+        answer = _llm_choose(prompt, valid_options={"yes", "no"})
+        if answer == "no":
+            return False
+        return True
+    except Exception:
+        return True
+
+
 def queue_alert(alert_type: str, message: str, force: bool = False):
     """
     Add an alert to the priority queue.
@@ -321,6 +344,13 @@ def _process_queue():
             # Re-queue if high priority — try again later
             if priority >= HIGH:
                 _alert_queue.put((neg_priority, timestamp, alert_type, message))
+            continue
+
+        # LLM‑first relevance filter — skip if the LLM judges this alert as noise
+        if not _llm_should_notify(alert_type, message):
+            log_alert(alert_type, message, int(priority), spoken=False)
+            _debug_skip = f"  Priority engine: alert '{alert_type}' suppressed by LLM relevance check"
+            print(_debug_skip)
             continue
 
         # Speak it!

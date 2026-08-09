@@ -7,6 +7,17 @@ import time
 import pytest
 import requests
 
+# Freeze brain's import-time env before ANY test module imports it. Without
+# this, the first file to import brain (collection order is randomized by
+# pytest-randomly) decides whether the local NN intent fast-path is enabled,
+# which makes the keyword-routing tests in tests/test_router.py flaky.
+os.environ.setdefault("JARVIS_LOCAL_INTENT_ENABLED", "0")
+os.environ.setdefault("JARVIS_LLM_FIRST", "0")
+# Per-intent gate values test_intent_gates.py asserts against — frozen here so
+# brain's import-time thresholds dict matches regardless of collection order.
+os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85")
+os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE_CHAT", "0.80")
+
 
 def _free_port(port: int = 8000):
     """Kill any process listening on the given port."""

@@ -198,6 +198,29 @@ def get_latest_logs(n: int = 50) -> list:
         return []
 
 
+def count_intents() -> dict:
+    """Per-intent request counts from the persisted request log (survives restarts)."""
+    _ensure_log_dir()
+    counts = {}
+    if not os.path.exists(LOG_FILE):
+        return counts
+    try:
+        with open(LOG_FILE) as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") == "tool_call":
+                    continue
+                intent = entry.get("intent")
+                if intent:
+                    counts[intent] = counts.get(intent, 0) + 1
+    except OSError:
+        pass
+    return counts
+
+
 def get_cost_report(days: int = 30) -> dict:
     cost = get_cost_summary()
     cost["estimated_daily"] = round(cost.get("cost_usd_total", 0) / max(days, 1), 4)

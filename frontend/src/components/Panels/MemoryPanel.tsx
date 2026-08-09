@@ -22,7 +22,7 @@ export function MemoryPanel() {
   return (
     <div>
       <div className="panel-title">Memory</div>
-      <div id="memoryStatus" style={{ fontSize: '0.65rem', color: 'var(--fg-dim)', lineHeight: '2' }}>
+      <div id="memoryPanelStatus" style={{ fontSize: '0.65rem', color: 'var(--fg-dim)', lineHeight: '2' }}>
         <div>Facts: {memoryStats?.explicit_memories ?? '?'} entries</div>
         <div>Vector: {memoryStats?.vector_entries ?? '?'} chunks</div>
         <div>RAG: {memoryStats?.rag_chunks ?? '?'} doc chunks</div>

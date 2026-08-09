@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# jsf – start or stop the Jarvis webapp (backend + Vite dev server)
+# Usage:
+#   jsf            # start backend (server.py) and frontend (npm run dev)
+#   jsf stop      # stop the processes serving :8000 and :5137
+#   jsf status    # show what's running on :8000 and :5137
+
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PID_FILE="${BASE_DIR}/.jsf_pids"
+BACKEND_PORT=8000
+FRONTEND_PORT=5137
+
+listener_pid() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1
+}
+
+start() {
+  echo "Starting Jarvis webapp..."
+  local backend_pid frontend_pid
+
+  # Backend
+  backend_pid="$(listener_pid $BACKEND_PORT)"
+  if [[ -n "$backend_pid" ]]; then
+    echo "  Backend already running (PID $backend_pid on :$BACKEND_PORT)"
+  else
+    pushd "$BASE_DIR" >/dev/null || exit 1
+    source venv/bin/activate
+    nohup python server.py >/tmp/jarvis_server.log 2>&1 < /dev/null &
+    backend_pid=$!
+    popd >/dev/null || exit 1
+    echo "  Backend started (PID $backend_pid, log: /tmp/jarvis_server.log)"
+  fi
+
+  # Frontend (vite)
+  frontend_pid="$(listener_pid $FRONTEND_PORT)"
+  if [[ -n "$frontend_pid" ]]; then
+    echo "  Frontend already running (PID $frontend_pid on :$FRONTEND_PORT)"
+  else
+    pushd "$BASE_DIR/frontend" >/dev/null || exit 1
+    nohup npm run dev >/tmp/jarvis_vite.log 2>&1 < /dev/null &
+    frontend_pid=$!
+    popd >/dev/null || exit 1
+    echo "  Frontend started (PID $frontend_pid, log: /tmp/jarvis_vite.log)"
+  fi
+
+  echo "${backend_pid} ${frontend_pid}" > "${PID_FILE}"
+  echo ""
+  echo "Jarvis webapp ready:"
+  echo "  - Backend:  http://localhost:8000"
+  echo "  - Frontend: http://localhost:5137"
+}
+
+stop() {
+  local pids
+  # Kill by port (source of truth), fall back to PID file
+  pids="$(listener_pid $BACKEND_PORT) $(listener_pid $FRONTEND_PORT)"
+  if [[ -f "${PID_FILE}" ]]; then
+    pids="$pids $(cat "${PID_FILE}")"
+  fi
+
+  if [[ -z "$(echo $pids | tr ' ' '\n' | sort -u | grep -E '[0-9]+')" ]]; then
+    echo "Nothing running on :$BACKEND_PORT or :$FRONTEND_PORT."
+    rm -f "${PID_FILE}"
+    return
+  fi
+
+  echo "Stopping: $(echo $pids | tr ' ' '\n' | sort -un | tr '\n' ' ')"
+  for pid in $(echo $pids | tr ' ' '\n' | sort -un); do
+    kill "$pid" 2>/dev/null || true
+    pkill -P "$pid" 2>/dev/null || true
+  done
+  rm -f "${PID_FILE}"
+  echo "Jarvis webapp stopped."
+}
+
+status() {
+  local bp fp
+  bp="$(listener_pid $BACKEND_PORT)"
+  fp="$(listener_pid $FRONTEND_PORT)"
+  echo "Backend  :$BACKEND_PORT  →  ${bp:-NOT RUNNING}"
+  echo "Frontend :$FRONTEND_PORT →  ${fp:-NOT RUNNING}"
+  if [[ -n "$bp" ]]; then ps -p "$bp" -o pid,command --no-headers 2>/dev/null; fi
+  if [[ -n "$fp" ]]; then ps -p "$fp" -o pid,command --no-headers 2>/dev/null; fi
+}
+
+case "$1" in
+  stop|/jsf) stop;;
+  status) status;;
+  *) start;;
+esac

@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 
@@ -18,8 +19,9 @@ CHANNELS = 1
 WAKE_WORDS = ["hey_jarvis", "jarvis"]
 
 # Sensitivity — higher = more sensitive but more false positives
-# 0.3 is a good balance
-SENSITIVITY = 0.3
+# Conservative default (0.7) agreed for always-on wake mode; env-overridable.
+SENSITIVITY = float(os.getenv("JARVIS_WAKE_THRESHOLD", "0.7"))
+WAKE_MODEL = os.getenv("JARVIS_WAKE_MODEL", "hey_jarvis")
 
 # ─────────────────────────────────────────────
 # STATE
@@ -93,7 +95,7 @@ def _load_model():
 
             # Try to load hey_jarvis model first
             # OWW will download it automatically on first run
-            _model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+            _model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
             print("  OpenWakeWord ready — listening for 'Hey Jarvis'")
         except Exception as e:
             print(f"  OWW model load failed: {e}")

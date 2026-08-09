@@ -1,40 +1,50 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../../stores/useAppStore';
-import { useAuthStore } from '../../stores/useAuthStore';
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export function Header() {
-  const { connected, setConnected } = useStore();
-  const { isAuthenticated } = useAuthStore();
-  const [time, setTime] = useState('');
+  const { connected } = useStore();
+  const [online, setOnline] = useState(connected);
+  const [model, setModel] = useState('MODEL');
+  const [time, setTime] = useState('--:--:--');
 
   useEffect(() => {
     const update = () => {
       const now = new Date();
-      setTime(now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-      document.getElementById('footerTime')!.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const dateStr = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      setTime(`${dateStr} · ${timeStr}`);
+      const footerTime = document.getElementById('footerTime');
+      if (footerTime) footerTime.textContent = timeStr;
     };
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
   }, []);
 
-  // Fetch runtime status to display current model
+  // Poll /health like the static UI — drives ONLINE/OFFLINE + model name
   useEffect(() => {
-    if (!connected) return;
-    const fetchStatus = async () => {
+    const checkServer = async () => {
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/health`);
-        if (res.ok) {
-          const data = await res.json();
-          const model = data.model_last_used || data.model_preferred || 'MODEL';
-          document.getElementById('modelStatus')!.textContent = model;
-        }
+        const res = await fetch(`${API}/health`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setOnline(true);
+        const runtime = data.runtime || {};
+        const last = runtime.model_last_used;
+        const pref = runtime.model_preferred;
+        setModel((last && last !== 'unknown' ? last : pref) || 'MODEL');
       } catch (e) {
-        console.error('Failed to fetch model status', e);
+        setOnline(false);
       }
     };
-    fetchStatus();
-  }, [connected]);
+    checkServer();
+    const id = setInterval(checkServer, 20000);
+    return () => clearInterval(id);
+  }, []);
+
+  const isOnline = online;
 
   return (
     <header className="header">
@@ -46,14 +56,14 @@ export function Header() {
       </div>
       <div className="status-bar">
         <div className="status-item">
-          <div className={connected ? "dot" : "dot offline"} id="serverDot"></div>
-          <span id="serverStatus">{connected ? "CONNECTED" : "CONNECTING"}</span>
+          <div className={isOnline ? "dot" : "dot offline"} id="serverDot"></div>
+          <span id="serverStatus">{isOnline ? "ONLINE" : "OFFLINE"}</span>
         </div>
         <div className="status-item">
-          <div className="dot" id="modelDot"></div>
-          <span id="modelStatus">MODEL</span>
+          <div className={isOnline ? "dot" : "dot offline"} id="modelDot"></div>
+          <span id="modelStatus">{model}</span>
         </div>
-        <div className="status-item" id="timeDisplay">--:--:--</div>
+        <div className="status-item" id="timeDisplay">{time}</div>
       </div>
     </header>
   );

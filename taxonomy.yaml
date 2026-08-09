@@ -1,0 +1,280 @@
+# Jarvis Fine-Grained Intent Taxonomy (Two-Stage Router)
+# Coarse 6-way → Specialist MLP per bucket
+# Version: 2026-08-09
+# Soft spots to revisit post-training: [ocr_document, open_in_finder]
+
+coarse_intents:
+  - chat
+  - coding
+  - tool_use
+  - reasoning
+  - self_mod
+  - automation
+
+# ─── Fine-Grained Classes per Bucket ───
+
+tool_use:  # 46 classes
+  - app_open
+  - app_close
+  - app_focus
+  - browser_navigate
+  - browser_search
+  - file_read
+  - file_write
+  - file_create
+  - file_list
+  - file_search
+  - sys_info
+  - disk_usage
+  - process_list
+  - calendar_add
+  - calendar_get
+  - message_send
+  - spotify_control
+  - timer_set
+  - timer_cancel
+  - screen_describe
+  - weather_current
+  - weather_detailed
+  - finance_quote
+  - reminders_manage
+  - gdrive_manage
+  - gsheets_manage
+  - gmail_manage
+  - github_manage
+  - knowledge_add
+  - knowledge_query
+  - memory_search
+  - recap_get
+  - goals_manage
+  - news_fetch
+  - shopping_search
+  - diagnostics
+  - agents_manage
+  - selfmod_code
+  - api_keys
+  - oauth_flow
+  - project_scan
+  - geo_code
+  - directions
+  - image_analyze
+  - video_analyze
+  - screenshot_take
+
+coding:  # 12 classes
+  - write_code
+  - debug_code
+  - improve_code
+  - explain_code
+  - run_tests
+  - design_api
+  - generate_docs
+  - review_code
+  - implement_feature
+  - write_script
+  - convert_lang
+  - write_config
+
+chat:  # 9 classes
+  - greet
+  - farewell
+  - thanks
+  - joke
+  - small_talk
+  - remember_fact
+  - recall_fact
+  - ask_identity
+  - ask_capabilities
+
+reasoning:  # 9 classes
+  - explain_concept
+  - compare_options
+  - analyze_pros_cons
+  - design_strategy
+  - why_question
+  - how_question
+  - math_problem
+  - logic_puzzle
+  - decision_help
+
+self_mod:  # 6 classes
+  - fix_own_code
+  - add_feature
+  - update_config
+  - improve_perf
+  - read_own_code
+  - modify_tool
+
+automation:  # 7 classes
+  - schedule_task
+  - create_workflow
+  - monitor_resource
+  - organize_files
+  - backup_data
+  - automate_reminders
+  - setup_cron
+
+# ─── Tool → Fine Intent Mapping (for real-log labeling) ───
+tool_to_intent:
+  open_app: app_open
+  get_open_apps: app_open
+  quit_app: app_close
+  focus_app: app_focus
+  browser_navigate: browser_navigate
+  browser_new_tab: browser_navigate
+  browser_quick_search: browser_search
+  browser_search: browser_search
+  web_search: browser_search
+  search_web: browser_search
+  read_file: file_read
+  write_file: file_write
+  create_file: file_create
+  list_directory: file_list
+  open_in_finder: file_list
+  search_in_files: file_search
+  get_system_info: sys_info
+  disk_usage: disk_usage
+  get_top_processes: process_list
+  add_calendar_event: calendar_add
+  get_calendar_events: calendar_get
+  get_recent_events: calendar_get
+  send_imessage: message_send
+  discord_send_message: message_send
+  discord_open_and_send: message_send
+  discord_open_channel: message_send
+  spotify_play: spotify_control
+  spotify_play_song: spotify_control
+  spotify_pause: spotify_control
+  spotify_next: spotify_control
+  spotify_previous: spotify_control
+  spotify_volume_up: spotify_control
+  spotify_volume_down: spotify_control
+  spotify_current: spotify_control
+  set_timer: timer_set
+  cancel_timer: timer_cancel
+  read_screen: screen_describe
+  summarize_screen: screen_describe
+  find_recent_screenshot: screen_describe
+  analyze_image: image_analyze
+  ocr_document: image_analyze
+  analyze_video: video_analyze
+  take_screenshot: screenshot_take
+  get_weather: weather_current
+  get_weather_detailed: weather_detailed
+  get_stock_quote: finance_quote
+  get_stock_time_series: finance_quote
+  get_crypto_quote: finance_quote
+  get_forex_rate: finance_quote
+  reminders_create: reminders_manage
+  reminders_list: reminders_manage
+  reminders_complete: reminders_manage
+  reminders_delete: reminders_manage
+  reminders_get_lists: reminders_manage
+  reminders_search: reminders_manage
+  gdrive_create_folder: gdrive_manage
+  gdrive_download: gdrive_manage
+  gdrive_upload: gdrive_manage
+  gdrive_list: gdrive_manage
+  gdrive_search: gdrive_manage
+  gdrive_move: gdrive_manage
+  gdrive_delete: gdrive_manage
+  gdrive_share: gdrive_manage
+  gdrive_get: gdrive_manage
+  gsheets_create: gsheets_manage
+  gsheets_get: gsheets_manage
+  gsheets_get_values: gsheets_manage
+  gsheets_read_range: gsheets_manage
+  gsheets_read_sheet: gsheets_manage
+  gsheets_append: gsheets_manage
+  gsheets_update_range: gsheets_manage
+  gsheets_batch_update: gsheets_manage
+  gsheets_add_sheet: gsheets_manage
+  gmail_search: gmail_manage
+  gmail_send: gmail_manage
+  gmail_get_message: gmail_manage
+  gmail_get_labels: gmail_manage
+  github_create_issue: github_manage
+  github_list_issues: github_manage
+  github_list_repos: github_manage
+  github_search_code: github_manage
+  github_get_repo: github_manage
+  add_to_knowledge_graph: knowledge_add
+  query_my_knowledge_graph: knowledge_query
+  semantic_search_memory: memory_search
+  search_my_notes: memory_search
+  get_recap: recap_get
+  add_goal: goals_manage
+  list_goals: goals_manage
+  update_goal_status: goals_manage
+  add_goal_progress: goals_manage
+  get_goal: goals_manage
+  set_goal_next_check: goals_manage
+  fetch_top_headlines: news_fetch
+  fetch_everything: news_fetch
+  search_news: news_fetch
+  warwatch_news: news_fetch
+  search_shopping: shopping_search
+  get_provider_status_summary: diagnostics
+  diagnose_issue: diagnostics
+  agent_spawn: agents_manage
+  get_agent_status: agents_manage
+  list_agents: agents_manage
+  modify_own_tool: selfmod_code
+  save_api_key: api_keys
+  list_configured_keys: api_keys
+  gdrive_auth_url: oauth_flow
+  gdrive_handle_callback: oauth_flow
+  github_auth_url: oauth_flow
+  github_handle_callback: oauth_flow
+  gmail_auth_url: oauth_flow
+  gmail_handle_callback: oauth_flow
+  gsheets_auth_url: oauth_flow
+  gsheets_handle_callback: oauth_flow
+  geocode_address: geo_code
+  reverse_geocode: geo_code
+  place_search: geo_code
+  get_directions: directions
+  explain_capability: ask_capabilities
+  inspect_capabilities: ask_capabilities
+  get_own_source: read_own_code
+  list_own_modules: read_own_code
+  list_configured_keys: api_keys
+  greet: greet
+
+# ─── Execution Primitives (excluded from classifier) ───
+# Low-level tools invoked by higher-level intents, not user-facing intents.
+execution_primitives:
+  - backup_file
+  - append_file
+  - scan_project_structure
+  - get_function_signatures
+  - get_modification_history
+  - get_largest_files
+  - check_screen_for_alerts
+  - click_on_screen
+  - find_on_screen
+  - move_and_click
+  - mouse_click
+  - mouse_move
+  - type_text
+  - press_key
+  - run_terminal_command
+  - run_python
+  - run_python_sandboxed
+  - run_command_sandboxed
+  - browser_back
+  - browser_forward
+  - browser_reload
+  - browser_scroll
+  - browser_close_tab
+  - browser_current_url
+  - list_contacts
+
+# ─── Soft Spots to Revisit Post-Training ───
+soft_spots:
+  - merge: ocr_document → image_analyze
+    reason: "OCR (extract text) vs image_analyze (visual description) may need distinct handling"
+    check: "eval accuracy on image_analyze; confusion between OCR-style and description-style queries"
+  - merge: open_in_finder → file_list
+    reason: "list files (show in chat) vs open in Finder (launch app) are different actions"
+    check: "eval accuracy on file_list; user phrasing 'open in finder' vs 'list files'"

@@ -18,6 +18,7 @@ from config import (
     MODEL_CONTEXT_LIMITS,
     SAFETY_PENDING_TTL,
 )
+from event_bus import subscribe
 from memory import (
     build_memory_block,
     build_semantic_memory_block,
@@ -54,15 +55,32 @@ HUGGINGFACE_TOKEN = _env("HUGGINGFACE_TOKEN")
 
 MOCK_PROVIDER_URL = os.getenv("MOCK_PROVIDER_URL", "http://localhost:8888").rstrip("/")
 JARVIS_MOCK_PROVIDERS = os.getenv("JARVIS_MOCK_PROVIDERS", "0") == "1"
+JARVIS_LLM_FIRST = os.getenv("JARVIS_LLM_FIRST", "1") == "1"
+JARVIS_LOCAL_ENABLED = os.getenv("JARVIS_LOCAL_ENABLED", "1") == "1"
+JARVIS_EVAL_MODE = os.getenv("JARVIS_EVAL_MODE", "0") == "1"
+JARVIS_LOCAL_INTENT_ENABLED = os.getenv("JARVIS_LOCAL_INTENT_ENABLED", "1") == "1"
+JARVIS_LOCAL_INTENT_CONFIDENCE = float(os.getenv("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85"))
+
+_LOCAL_INTENT_THRESHOLDS = {
+    intent: float(os.getenv(f"JARVIS_LOCAL_INTENT_CONFIDENCE_{intent.upper()}", str(JARVIS_LOCAL_INTENT_CONFIDENCE)))
+    for intent in ("chat", "coding", "tool_use", "reasoning", "self_mod", "automation")
+}
+
+
+def _local_intent_threshold(intent: str) -> float:
+    """Per-intent confidence gate; falls back to the global JARVIS_LOCAL_INTENT_CONFIDENCE."""
+    return _LOCAL_INTENT_THRESHOLDS.get(intent, JARVIS_LOCAL_INTENT_CONFIDENCE)
 
 GEMINI_TOOL_MODEL = "gemini-2.5-flash"
 GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"]
 NIM_MODEL_TIER5 = ["meta/llama-4-maverick-17b-128e-instruct", "minimaxai/minimax-m2.7"]
 NIM_MODEL_TIER6 = ["qwen/qwen3.5-397b-a17b", "mistralai/mistral-large-3-675b-instruct-2512"]
 DEEPSEEK_API_KEY = _env("DEEPSEEK_API_KEY")
+# DeepSeek v4 Flash is EOL (2026-08-07). Commented out fallback.
 DEEPSEEK_MODEL = "deepseek-ai/deepseek-v4-flash"
 GROQ_MODEL = "llama-3.3-70b-versatile"
-OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+# OpenRouter free tier: use a known working free model
+OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
 POLLINATIONS_MODEL = "openai"
 NEMOTRON_ULTRA_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 
@@ -74,9 +92,162 @@ GEMINI_MAX_TOOL_ROUNDS = 8
 CIRCUIT_BREAKER_THRESHOLD = 3
 CIRCUIT_BREAKER_TIMEOUT = 600
 
+# ----- LLM‑first helper utilities -----
+
+def _llm_choose(prompt: str, valid_options: set[str] | None = None, max_retries: int = 2) -> str | None:
+    """Ask Nemotron Ultra (LLM‑first) for a short decision.
+    Returns the stripped, lower‑cased response if it matches one of ``valid_options``
+    (or any non‑empty string if ``valid_options`` is ``None``). Returns ``None`` on any error.
+    """
+    if not (JARVIS_LLM_FIRST and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra")):
+        return None
+    if JARVIS_MOCK_PROVIDERS:
+        return None
+    try:
+        resp = _retry(lambda: ask_nemotron_ultra(prompt, []), max_retries=max_retries).strip().lower()
+        if not resp:
+            return None
+        if valid_options is not None and resp not in valid_options:
+            return None
+        return resp
+    except Exception as e:
+        _debug(f"[LLM‑choose] error: {e}")
+        return None
+
+def _select_primary_provider(user_message: str) -> str | None:
+    """LLM‑first selector between Nemotron Ultra and DeepSeek for coding tasks.
+    Returns ``"nemotron_ultra"`` or ``"deepseek"`` (lower‑case) or ``None``.
+    """
+    if not JARVIS_LLM_FIRST:
+        return None
+    opts = {"nemotron_ultra", "deepseek"}
+    prompt = (
+        "Given the following user request, decide which primary language model should handle it. "
+        "Options are: 'nemotron_ultra' for NVIDIA Nemotron Ultra, or 'deepseek' for DeepSeek. "
+        "Respond with only the selected option name.\n\n"
+        f"User request: {user_message}\n"
+    )
+    choice = _llm_choose(prompt, valid_options=opts)
+    return choice
+
+_local_override: str | None = None  # "local" | "cloud" | None (auto)
+
+
+def set_local_override(mode: str | None) -> None:
+    """Set a session-wide routing override: 'local', 'cloud', or None (auto).
+    Switching to cloud frees the local model's ~2.5GB of RAM."""
+    global _local_override
+    _local_override = mode if mode in ("local", "cloud") else None
+    if _local_override != "local":
+        try:
+            from local_provider import unload
+
+            unload()
+            _debug("[Router] Local MLX model unloaded (cloud mode)")
+        except Exception:
+            pass
+
+
+def _try_local_routing(user_message: str, intent: str | None = None) -> str | None:
+    """Handle 'use local'/'use cloud' overrides and simple-chat local replies.
+    Returns a reply string when handled locally, None to continue to cloud."""
+    global _last_provider_used, _last_model_used
+    msg = (user_message or "").strip().lower()
+    if msg in ("use local", "use the local model", "switch to local"):
+        set_local_override("local")
+        return "Switched to the local model for this session."
+    if msg in ("use cloud", "use the cloud", "switch to cloud", "use online"):
+        set_local_override("cloud")
+        return "Switched to cloud providers for this session."
+    if _local_override is not None and _local_override != "local":
+        return None
+    if not JARVIS_LOCAL_ENABLED:
+        return None
+    try:
+        from local_provider import is_available
+
+        if not is_available():
+            return None
+    except Exception:
+        return None
+    if intent is None:
+        intent = classify_intent(user_message)
+    if intent != "chat" or _estimate_task_complexity(user_message) > 4:
+        return None
+    try:
+        from local_provider import JARVIS_LOCAL_MODEL, ask_local
+
+        reply = ask_local(user_message)
+    except Exception as e:
+        _debug(f"[Router] Local provider error: {e}")
+        reply = ""
+    if not reply:
+        return None
+    _debug("[Router] Local MLX reply (offline-capable)")
+    _last_provider_used = "local_mlx"
+    _last_model_used = JARVIS_LOCAL_MODEL
+    return reply
+
+
+
+
+def _classify_error(error_text: str) -> str | None:
+    """LLM‑first error classification. Returns one of a small set of labels or ``None``.
+    Labels: rate_limit, auth_error, timeout, quota, internal, unknown.
+    """
+    if not JARVIS_LLM_FIRST:
+        return None
+    prompt = (
+        "Classify the following provider error into one of these categories: "
+        "rate_limit, auth_error, timeout, quota, internal, unknown. "
+        "Respond with only the category name.\n\n"
+        f"Error: {error_text}\n"
+    )
+    return _llm_choose(prompt)
+
+def _handle_provider_failure(provider_name: str, exc: Exception) -> None:
+    """Centralized failure handling that uses LLM error classification to decide backoff.
+    Calls ``_record_provider_failure`` and ``_backoff_provider`` with a duration based on the error type.
+    """
+    label = _classify_error(str(exc))
+    if label == "rate_limit":
+        backoff_secs = 1800
+    elif label == "auth_error":
+        backoff_secs = 0
+    elif label == "timeout":
+        backoff_secs = 300
+    elif label == "quota":
+        backoff_secs = 1200
+    else:
+        backoff_secs = CIRCUIT_BREAKER_TIMEOUT
+    _record_provider_failure(provider_name)
+    _backoff_provider(provider_name, seconds=backoff_secs)
+
+
+def _summarize_conversation(recent_turns: int = 10) -> str:
+    """LLM‑first summarization of the most recent conversation turns.
+    Returns an empty string if disabled, unavailable, or the LLM call fails.
+    """
+    if not JARVIS_LLM_FIRST:
+        return ""
+    if len(conversation) < 2:
+        return ""
+    recent = conversation[-(recent_turns * 2):]
+    prompt = (
+        "Summarize the following conversation in 2-3 sentences. Preserve any tasks, "
+        "decisions, and key facts. Respond with only the summary.\n\n"
+    )
+    for m in recent:
+        role = m.get("role", "user")
+        content = (m.get("content") or "")[:800]
+        prompt += f"{role.title()}: {content}\n"
+    return _llm_choose(prompt) or ""
+
+
 conversation = []
 pending_action = {"fn": None, "description": None, "expires_at": 0}
 _learned_tools = {}
+_loading_learned_tools = False
 _pending_safe = {"tool": None, "fn": None, "args": None, "level": None, "expires_at": 0}
 _pending_lock = threading.Lock()
 _genai_client = None
@@ -119,6 +290,7 @@ class ConversationContext:
         self.last_tools: list[str] = []
         self.last_error: str | None = None
         self.fragment_awaiting_context: bool = False
+        self.intent_cache: dict[str, str] = {}
 
     def snapshot(self) -> dict:
         return {
@@ -287,11 +459,60 @@ TOOL_USE_KEYWORDS = {
 }
 
 
-def classify_intent(text: str) -> str:
-    """Route requests into categories: coding, tool_use, reasoning, self_mod, chat."""
-    t = text.lower()
+def _local_intent_predict(text: str) -> tuple[str | None, float]:
+    """Predict intent with the on-device NN router. Returns (None, 0.0) when disabled/unavailable."""
+    if not JARVIS_LOCAL_INTENT_ENABLED:
+        return None, 0.0
+    try:
+        from jarvis_local_nn.integration.local_router import predict_intent
 
-    # Self-modification — touching Jarvis's own source code
+        return predict_intent(text)
+    except Exception:
+        return None, 0.0
+
+
+_last_fine_intent: str | None = None
+_last_fine_confidence: float = 0.0
+
+
+def get_last_fine_intent() -> tuple[str | None, float]:
+    """Fine-grained intent + confidence from the most recent classify_intent call."""
+    return _last_fine_intent, _last_fine_confidence
+
+
+def _local_fine_predict(text: str, coarse: str) -> tuple[str | None, float]:
+    """Two-stage: coarse bucket → specialist MLP. Returns (fine_intent, confidence).
+
+    Per-class confidence gates are applied inside predict_fine_gated — below the
+    gate the label is withheld so callers fall through to LLM routing.
+    """
+    global _last_fine_intent, _last_fine_confidence
+    _last_fine_intent, _last_fine_confidence = None, 0.0
+    try:
+        from jarvis_local_nn.integration.specialist_router import predict_fine_gated
+
+        fine, conf = predict_fine_gated(coarse, text)
+        if fine is not None:
+            _last_fine_intent, _last_fine_confidence = fine, conf
+        return fine, conf
+    except Exception:
+        return None, 0.0
+
+
+def _clear_fine_intent() -> None:
+    """Reset fine-intent globals so stale values from a prior request never leak."""
+    global _last_fine_intent, _last_fine_confidence
+    _last_fine_intent, _last_fine_confidence = None, 0.0
+
+
+def classify_intent(text: str) -> str:
+    """Route requests into categories: coding, tool_use, reasoning, self_mod, chat.
+    Primary classification uses keyword-based heuristics for precise patterns (self_mod),
+    then LLM for ambiguous cases.
+    """
+    _clear_fine_intent()
+    t = text.lower()
+    # Self-modification — touching Jarvis's own source code (keyword-first for precision)
     self_mod_files = ("brain.py", "tts.py", "safety.py", "agent.py", "terminal.py", "server.py")
     self_mod_files_with_path = ("tools/", "config.py", "tools/__init__.py")
     self_mod_verbs = (
@@ -323,6 +544,81 @@ def classify_intent(text: str) -> str:
         if any(v in t for v in self_mod_verbs):
             _debug(f"[Intent] classify_intent('{text}'): 'self_mod' — keyword + verb")
             return "self_mod"
+
+    # Memory triggers — handled directly in process(), not via tools
+    memory_triggers = (
+        "remember that",
+        "remember my",
+        "remember i",
+        "keep in mind",
+        "don't forget",
+        "note that",
+        "forget ",
+        "erase ",
+        "delete memory",
+    )
+    if any(k in t for k in memory_triggers):
+        _debug(f"[Intent] classify_intent('{text}'): 'chat' — memory trigger")
+        return "chat"
+
+    # Knowledge/memory queries — handled directly in process()
+    knowledge_triggers = (
+        "what do you know",
+        "what do you remember",
+        "what have you learned",
+        "what have you told",
+    )
+    if any(k in t for k in knowledge_triggers):
+        _debug(f"[Intent] classify_intent('{text}'): 'chat' — knowledge query")
+        return "chat"
+
+    # Check intent cache (per-turn)
+    if text in conversation_context.intent_cache:
+        cached = conversation_context.intent_cache[text]
+        _debug(f"[Intent] classify_intent('{text}'): '{cached}' — cached")
+        return cached
+
+    # Local NN fast-path — skip cloud LLM when the on-device router is confident
+    if not JARVIS_MOCK_PROVIDERS and not JARVIS_EVAL_MODE:
+        _local_intent, _local_conf = _local_intent_predict(text)
+        if _local_intent is not None and _local_conf >= _local_intent_threshold(_local_intent):
+            conversation_context.intent_cache[text] = _local_intent
+            _debug(f"[Intent] classify_intent('{text}'): '{_local_intent}' — local NN ({_local_conf:.2f})")
+            # Two-stage: fine-grained intent from the bucket's specialist (best-effort)
+            _fine, _fine_conf = _local_fine_predict(text, _local_intent)
+            if _fine is not None:
+                _debug(f"[Intent] fine: '{_fine}' ({_fine_conf:.2f})")
+            return _local_intent
+
+    # LLM‑first classification for remaining cases (≈90% of cases)
+    if JARVIS_LLM_FIRST and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra") and not JARVIS_MOCK_PROVIDERS:
+        try:
+            llm_prompt = (
+                "Classify the following user request into one of these categories: "
+                "coding, tool_use, reasoning, self_mod, chat. Respond with only the category name.\n\n"
+                f"User request: {text}\n"
+            )
+            # Use the low‑level Nemotron Ultra call to avoid routing loops
+            classification = _retry(lambda: ask_nemotron_ultra(llm_prompt, []), max_retries=2).strip().lower()
+            if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
+                _debug(f"[Intent] LLM classification gave '{classification}'")
+                # If LLM says 'chat' but text matches reasoning patterns, defer to keyword fallback
+                reasoning_patterns = (
+                    "why does", "why is", "why are", "why would", "why did", "why do",
+                    "how do", "how does", "how can i", "how would", "how is it",
+                    "explain", "analyze", "design a", "design an", "strategy",
+                    "compare", "evaluate", "pros and cons", "think about",
+                    "what is the", "describe", "tell me about",
+                )
+                if classification == "chat" and any(k in t for k in reasoning_patterns):
+                    _debug("[Intent] LLM said 'chat' but reasoning pattern matched — deferring to keyword fallback")
+                else:
+                    conversation_context.intent_cache[text] = classification
+                    return classification
+        except Exception as e:
+            _debug(f"[Intent] LLM classification error: {e}")
+
+    # Keyword fallback for remaining cases
 
     # Coding — high-confidence check first (tool keywords may overlap)
     coding_hit = any(k in t for k in CODING_KEYWORDS)
@@ -415,7 +711,38 @@ def classify_intent(text: str) -> str:
         return "coding"
 
     _debug(f"[Intent] classify_intent('{text}'): 'chat' — default fallback")
+    conversation_context.intent_cache[text] = "chat"
     return "chat"
+
+# ----- Event handling -----
+def _event_to_message(payload):
+    # Determine display text based on payload keys
+    if 'alert_type' in payload:
+        return f"[PROACTIVE] {payload.get('alert_type').upper()}: {payload.get('message', '')}"
+    elif payload.get('agent_id'):
+        # Sub‑agent events (started, progress, completed)
+        if payload.get('final_answer'):
+            # Completed
+            return f"[SUB-AGENT] Goal: {payload.get('goal')}\nResult: {payload.get('final_answer')}"
+        elif payload.get('step'):
+            return f"[SUB-AGENT] Step {payload.get('step')} progress…"
+        else:
+            return f"[SUB-AGENT] Started: {payload.get('goal')}"
+    else:
+        return f"[EVENT] {payload}"
+
+def _handle_event(payload):
+    try:
+        content = _event_to_message(payload)
+        conversation.append({"role": "assistant", "content": content})
+    except Exception as e:
+        _debug(f"[Event] Failed to handle event: {e}")
+
+# Register subscriptions for relevant event types (run once on import)
+subscribe('proactive_alert', _handle_event)
+subscribe('subagent_started', _handle_event)
+subscribe('subagent_progress', _handle_event)
+subscribe('subagent_completed', _handle_event)
 
 
 def _resolve_project_root(path_hint: str = "~/Jarvis") -> str:
@@ -448,6 +775,29 @@ def _estimate_task_complexity(text: str) -> int:
     - Whether multiple tools/files involved
     - User's explicit complexity hints
     """
+    # LLM‑first complexity estimation — ask for a 1-10 score, map to iterations
+    if JARVIS_LLM_FIRST:
+        prompt = (
+            "Rate the complexity of the following user request on a scale of 1-10. "
+            "Consider: number of implied steps, tools or files involved, ambiguity, and "
+            "whether it requires coding or research. Respond with ONLY an integer 1-10.\n\n"
+            f"User request: {text}\n"
+        )
+        score = _llm_choose(prompt)
+        if score is not None:
+            try:
+                n = int(re.search(r"\d+", score).group())
+                n = max(1, min(10, n))
+                if n >= 8:
+                    return 12
+                if n >= 6:
+                    return 8
+                if n >= 4:
+                    return 6
+                return 4
+            except Exception:
+                pass
+
     t = (text or "").lower()
 
     # Very complex: full projects, migrations, end-to-end builds
@@ -531,7 +881,7 @@ def _record_provider_failure(provider_name: str):
 def _record_provider_success(provider_name: str, latency: float = 0.0):
     _provider_consecutive_failures.pop(provider_name, None)
     _provider_backoff_until.pop(provider_name, None)
-    _provider_health_scores[provider_name] = min(100, _provider_health_scores.get(provider_name, 0) + 5)
+    _provider_health_scores[provider_name] = min(100, _provider_health_scores.get(provider_name, 100) + 5)
     _provider_usage_count[provider_name] = _provider_usage_count.get(provider_name, 0) + 1
     h = _provider_health.setdefault(provider_name, _default_health_entry())
     h["health_score"] = _provider_health_scores[provider_name]
@@ -586,6 +936,7 @@ def _load_provider_health():
                 _provider_health.clear()
                 for name, h in data.items():
                     _provider_health[name] = h
+                    _provider_health_scores[name] = h.get("health_score", 100)
     except Exception as e:
         _debug(f"Failed to load provider health: {e}")
 
@@ -699,9 +1050,18 @@ def _provider_available(provider_name: str) -> bool:
     return True
 
 
+_DEBUG_LOG_PATH = os.path.join(os.path.expanduser("~/.jarvis/logs"), "debug.log")
+
+
 def _debug(message: str):
     if DEBUG:
         print(f"  [DEBUG] {message}")
+        try:
+            os.makedirs(os.path.dirname(_DEBUG_LOG_PATH), exist_ok=True)
+            with open(_DEBUG_LOG_PATH, "a") as f:
+                f.write(f"{datetime.datetime.now().isoformat()} {message}\n")
+        except OSError:
+            pass
 
 
 def get_runtime_status() -> dict:
@@ -810,6 +1170,13 @@ def _on_tool_learned(name, fn, description):
             },
         }
     )
+    if not _loading_learned_tools:
+        try:
+            from jarvis_local_nn.training.auto_retrain import schedule_retrain
+
+            schedule_retrain()
+        except Exception:
+            pass
 
 
 def _iter_unique_tool_definitions():
@@ -834,9 +1201,15 @@ def init():
 
     global SYSTEM_INFO
     SYSTEM_INFO = fetch_system_info()
-    learned = learner.load_learned_tools()
+    global _loading_learned_tools
+    _loading_learned_tools = True
+    try:
+        learned = learner.load_learned_tools()
+    finally:
+        _loading_learned_tools = False
     for name, fn in learned.items():
-        _on_tool_learned(name, fn, f"learned tool: {name}")
+        if name not in _learned_tools:
+            _on_tool_learned(name, fn, f"learned tool: {name}")
     from tts import speak
 
     learner.init(speak, _on_tool_learned)
@@ -1045,6 +1418,14 @@ def _build_search_query(user_message: str) -> str:
     return (cleaned or text)[:250]
 
 
+# Fine-grained intent → safe no-arg data tools for local prefetch (two-stage router)
+_FINE_PREFETCH = {
+    "weather_current": ("get_weather_detailed", {}),
+    "sys_info": ("get_system_info", {}),
+    "disk_usage": ("disk_usage", {}),
+}
+
+
 def _prefetch_tools_for_message(user_message: str) -> list[str]:
     """Run obvious tools locally so fallback LLMs (Groq) don't need to call them."""
     results = []
@@ -1093,6 +1474,17 @@ def _prefetch_tools_for_message(user_message: str) -> list[str]:
         if query:
             results.append(f"web_search: {_execute_tool('web_search', {'query': query})}")
 
+    # Fine-grained intent prefetch (two-stage router) — safe no-arg data tools only
+    fine, _fine_conf = get_last_fine_intent()
+    if fine and not results:
+        entry = _FINE_PREFETCH.get(fine)
+        if entry:
+            tool_name, args = entry
+            try:
+                results.append(f"{tool_name}: {_execute_tool(tool_name, args)}")
+            except Exception:
+                pass
+
     return results
 
 
@@ -1135,7 +1527,7 @@ def _sanitize_assistant_text(text: str) -> str:
     if stripped.startswith("[{") and '"name"' in stripped:
         return ""
 
-    # NIM/DeepSeek returning Python-repr style content blobs: [{'type': 'text', 'text': '...'}]
+    # NIM returning Python-repr style content blobs: [{'type': 'text', 'text': '...'}]
     if stripped.startswith("[{") and "'type'" in stripped and "'text'" in stripped:
         match = re.search(r"'text':\s*'((?:\\'|[^'])*)'", stripped)
         if match:
@@ -1369,6 +1761,34 @@ def infer_tool_from_args(parsed: dict, user_message: str = "") -> tuple | None:
     """Infer tool name+args from a naked argument dict. Returns (tool_name, args) or None."""
     if not isinstance(parsed, dict):
         return None
+
+    # LLM‑first inference — ask the model to map the raw args to a known tool
+    if JARVIS_LLM_FIRST:
+        try:
+            tool_names = [d["function"]["name"] for d in _iter_unique_tool_definitions()]
+            prompt = (
+                "You are mapping raw JSON arguments to a tool call. The model returned a "
+                "naked argument dict (no tool name). Choose the best tool from the available "
+                "list and return COMPLETE arguments for it.\n\n"
+                f"User request: {user_message}\n"
+                f"Raw args: {json.dumps(parsed)[:500]}\n\n"
+                f"Available tools: {', '.join(tool_names)}\n\n"
+                'Respond with ONLY JSON in this exact format: {"tool": "tool_name", "args": {...}}'
+            )
+            raw = _llm_choose(prompt)
+            if raw:
+                match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+                if match:
+                    data = json.loads(match.group())
+                    fn_name = data.get("tool")
+                    fn_args = data.get("args") or {}
+                    if isinstance(fn_name, str) and isinstance(fn_args, dict):
+                        validation = validate_tool_args(fn_name, fn_args)
+                        if not isinstance(validation, str):
+                            return validation
+        except Exception:
+            pass
+
     keys = list(parsed.keys())
     if len(keys) == 1:
         key = keys[0]
@@ -1881,10 +2301,13 @@ def sanitize_messages_for_fallback(messages: list[dict]) -> list[dict]:
     return sanitized
 
 
-def _provider_messages(user_message: str, tool_results: list[str]):
+def _provider_messages(user_message: str, tool_results: list[str], max_context_chars: int = 0):
     system_prompt = build_system_prompt(user_message)
     if tool_results:
-        system_prompt += "\n\nTool results already gathered:\n" + "\n".join(f"- {r}" for r in tool_results)
+        results_block = "\n".join(f"- {r}" for r in tool_results)
+        if max_context_chars > 0 and len(results_block) > max_context_chars:
+            results_block = results_block[:max_context_chars] + "..."
+        system_prompt += "\n\nTool results already gathered:\n" + results_block
         system_prompt += "\nUse these tool results directly. Do not call tools again."
     else:
         system_prompt += "\n\nAnswer the user directly from your knowledge. Do NOT mention calling tools, running commands, or checking anything. Just respond naturally and helpfully."
@@ -1892,13 +2315,28 @@ def _provider_messages(user_message: str, tool_results: list[str]):
     messages = [{"role": "system", "content": system_prompt}]
     clean_memory = [m for m in get_working_memory(user_message) if m.get("role") in ("user", "assistant", "system") and m.get("content")]
     clean_memory = sanitize_messages_for_fallback(clean_memory)
+    if max_context_chars > 0:
+        # Budget the recent history so the total request stays under provider limits.
+        budget = max_context_chars
+        trimmed = []
+        for m in reversed(clean_memory):
+            content = m.get("content") or ""
+            if len(content) <= budget:
+                trimmed.append(m)
+                budget -= len(content)
+            else:
+                m = dict(m)
+                m["content"] = content[:budget]
+                trimmed.append(m)
+                break
+        clean_memory = list(reversed(trimmed))
     messages.extend(clean_memory)
     messages.append({"role": "user", "content": user_message})
     return messages
 
 
 def _build_openai_functions():
-    """Legacy functions format — for providers that still use it (NIM, DeepSeek)."""
+    """Legacy functions format — for providers that still use it (NIM)."""
     functions = []
     for tool_def in _iter_unique_tool_definitions():
         fn = tool_def["function"]
@@ -1959,7 +2397,7 @@ def _openai_message_get_text(message):
 
 
 # Providers that require the modern tools/tool_choice format
-_TOOLS_FORMAT_PROVIDERS = {"Groq", "OpenRouter", "DeepSeek Flash"}
+_TOOLS_FORMAT_PROVIDERS = {"Groq", "OpenRouter"}
 
 
 def _mock_base_url() -> str | None:
@@ -1977,6 +2415,7 @@ def _ask_openai_compatible(
     tool_results: list[str],
     use_tools: bool = False,
     functions: list[dict] | None = None,
+    max_context_chars: int = 0,
 ) -> str:
     if not api_key:
         raise Exception(f"{provider_name} API key not configured")
@@ -1987,7 +2426,7 @@ def _ask_openai_compatible(
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key, base_url=base_url)
-    messages = _provider_messages(user_message, tool_results)
+    messages = _provider_messages(user_message, tool_results, max_context_chars=max_context_chars)
 
     # Decide which calling format to use
     use_modern_format = provider_name in _TOOLS_FORMAT_PROVIDERS
@@ -2132,7 +2571,7 @@ def _ask_openai_compatible(
                 )
             continue  # loop to get final text response
 
-        # Legacy function_call format (NIM, DeepSeek)
+        # Legacy function_call format (NIM)
         if call_type == "function_call":
             fc = call_data
             name = fc.get("name") if isinstance(fc, dict) else getattr(fc, "name", None)
@@ -2392,6 +2831,9 @@ def ask_groq(user_message: str, tool_results: list[str]) -> str:
         GROQ_MODEL,
         user_message,
         tool_results,
+        # llama-3.3-70b on the on_demand tier caps at 12k tokens/request;
+        # trim tool results + history so we never 413.
+        max_context_chars=int(os.getenv("JARVIS_GROQ_CONTEXT_CHARS", "24000")),
     )
 
 
@@ -2440,6 +2882,66 @@ def ask_pollinations(user_message: str, tool_results: list[str]) -> str:
             _backoff_provider("Pollinations", 120)
             raise Exception("Pollinations returned an empty response")
     return text.strip()
+
+
+def ask_local_offline(user_message: str, tool_results: list[str]) -> str:
+    """Last-resort provider: deterministic reply from the on-device intent router.
+
+    Never raises. Uses locally prefetched tool results when available (weather,
+    system info, web search) so the user still gets real data offline.
+    """
+    try:
+        from jarvis_local_nn.integration.local_router import predict_intent
+
+        intent, _confidence = predict_intent(user_message)
+    except Exception:
+        intent = None
+
+    results = [str(r) for r in (tool_results or []) if str(r).strip()]
+
+    if intent == "tool_use" and results:
+        body = "\n".join(f"- {r[:400]}" for r in results[:5])
+        return (
+            "I'm currently offline (all cloud providers unreachable), but I found "
+            f"this locally for you:\n\n{body}\n\n"
+            "(I can't run follow-up tools or hold a full conversation until the "
+            "network comes back.)"
+        )
+
+    canned = {
+        "tool_use": (
+            "I'm currently offline — every cloud provider is unreachable. I "
+            "recognize this as a task I'd normally do with a tool, but I can't "
+            "reach the services needed. Please try again when the network is back."
+        ),
+        "chat": (
+            "I'm currently offline, so I can only give you this canned reply. "
+            "When the network comes back I'll be able to chat normally."
+        ),
+        "coding": (
+            "I'm currently offline, so I can't generate or run code right now. "
+            "Please try again once the network is back."
+        ),
+        "reasoning": (
+            "I'm currently offline, so I can't reason about that properly. "
+            "Please try again once the network is back."
+        ),
+        "self_mod": (
+            "I'm currently offline. Self-modification requires a working model, "
+            "and it's protected behind a typed confirmation anyway — please try "
+            "again once the network is back."
+        ),
+        "automation": (
+            "I'm currently offline, so I can't run multi-step automations. "
+            "Please try again once the network is back."
+        ),
+    }
+    if intent and intent in canned:
+        return canned[intent]
+    return (
+        "I'm currently offline — every cloud provider is unreachable. "
+        "Please try again shortly."
+    )
 
 
 def ask_gemini_tool_first(user_message: str) -> tuple[list[str], str]:
@@ -2534,11 +3036,15 @@ Always prefer real tool results over assumptions."""
 def ask_with_tools(user_message: str) -> str:
     global _last_provider_used, _last_model_used, _nemotron_usage_count
 
-    if not _internet_available():
-        return "No internet connection. Cloud AI providers require internet access."
-
+    # ── Hybrid routing: local MLX first (simple chat, works offline) ──
     intent = classify_intent(user_message)
     _debug(f"[Router] Intent: {intent}")
+    local_reply = _try_local_routing(user_message, intent=intent)
+    if local_reply is not None:
+        return local_reply
+
+    if not _internet_available():
+        return "No internet connection. Cloud AI providers require internet access."
 
     if intent == "chat":
         try:
@@ -2554,21 +3060,37 @@ def ask_with_tools(user_message: str) -> str:
     else:
         _debug(f"[Router] Semantic cache bypass for intent={intent}")
 
-    # ── Coding → DeepSeek (primary) ──
-    if intent == "coding":
-        if DEEPSEEK_API_KEY and _provider_available("DeepSeek"):
+    # ── Primary: Nemotron Ultra (tool-first + final) ──
+    if JARVIS_LLM_FIRST:
+        chosen = _select_primary_provider(user_message)
+        if chosen == "nemotron_ultra" and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
             try:
-                _debug("[Router] Coding request → DeepSeek")
+                _debug("[Router] Nemotron Ultra primary (selected by LLM)")
+                _last_provider_used = "nemotron_ultra"
+                _last_model_used = NEMOTRON_ULTRA_MODEL
+                _nemotron_usage_count += 1
+                reply = _retry(lambda: ask_nemotron_ultra(user_message, []), max_retries=2)
+                if has_pending_safe():
+                    with _pending_lock:
+                        pending_tool = _pending_safe.get("tool", "that")
+                    return f"I need your permission to {pending_tool.replace('_', ' ')}. Shall I go ahead?"
+                _record_provider_success("Nemotron Ultra")
+                return reply
+            except Exception as e:
+                _debug(f"Nemotron Ultra primary failed (LLM-selected): {e}")
+                _handle_provider_failure("Nemotron Ultra", e)
+        elif chosen == "deepseek" and DEEPSEEK_API_KEY and _provider_available("DeepSeek"):
+            try:
+                _debug("[Router] DeepSeek primary (selected by LLM)")
                 _last_provider_used = "deepseek"
                 _last_model_used = DEEPSEEK_MODEL
                 reply = _retry(lambda: ask_deepseek(user_message, []), max_retries=2)
                 _record_provider_success("DeepSeek")
                 return reply
             except Exception as e:
-                _debug(f"DeepSeek failed: {e}")
-                _record_provider_failure("DeepSeek")
-
-    # ── Primary: Nemotron Ultra (tool-first + final) ──
+                _debug(f"DeepSeek primary failed (LLM-selected): {e}")
+                _handle_provider_failure("DeepSeek", e)
+    # Fallback to original provider logic
     if NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
         try:
             _debug("[Router] Nemotron Ultra primary")
@@ -2584,7 +3106,7 @@ def ask_with_tools(user_message: str) -> str:
             return reply
         except Exception as e:
             _debug(f"Nemotron Ultra primary failed: {e}")
-            _record_provider_failure("Nemotron Ultra")
+            _handle_provider_failure("Nemotron Ultra", e)
 
     # ── Plugin providers (after Nemotron, before built-in fallback) ──
     try:
@@ -2602,14 +3124,15 @@ def ask_with_tools(user_message: str) -> str:
                 return reply
             except Exception as e:
                 _debug(f"Plugin provider {pname} failed: {e}")
-                _record_provider_failure(pname)
+                _handle_provider_failure(pname, e)
     except Exception:
         pass
 
     # ── Capture tool results from primary provider (Nemotron) for fallback context ──
     _accumulated_tool_results = []
+    _TOOL_RESULT_LIMIT = 2000
     for key, val in _turn_memo_cache.items():
-        _accumulated_tool_results.append(f"{key}: {str(val)[:500]}")
+        _accumulated_tool_results.append(f"{key}: {str(val)[:_TOOL_RESULT_LIMIT]}")
 
     prefetched = _prefetch_tools_for_message(user_message)
     combined_results = _accumulated_tool_results + prefetched
@@ -2635,28 +3158,27 @@ def ask_with_tools(user_message: str) -> str:
         _debug("No accumulated tool results from primary provider")
 
     # Sort providers by health score descending for intelligent fallback
-    _provider_health_scores.setdefault("Gemini", 50)
-    _provider_health_scores.setdefault("Groq", 50)
-    _provider_health_scores.setdefault("NVIDIA NIM Tier 5", 50)
-    _provider_health_scores.setdefault("NVIDIA NIM Tier 6", 50)
-    _provider_health_scores.setdefault("DeepSeek", 50)
-    _provider_health_scores.setdefault("OpenRouter", 50)
-    _provider_health_scores.setdefault("Pollinations", 50)
+    _provider_health_scores.setdefault("Gemini", 100)
+    _provider_health_scores.setdefault("Groq", 100)
+    _provider_health_scores.setdefault("NVIDIA NIM Tier 5", 100)
+    _provider_health_scores.setdefault("NVIDIA NIM Tier 6", 100)
+    _provider_health_scores.setdefault("OpenRouter", 100)
+    _provider_health_scores.setdefault("Pollinations", 100)
 
     raw_providers = [
         ("Gemini", _gemini_available() and _provider_available("Gemini"), lambda: ask_gemini(user_message)),
         ("Groq", bool(GROQ_API_KEY), lambda: ask_groq(user_message, combined_results)),
         ("NVIDIA NIM Tier 5", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_tier5(user_message, combined_results)),
         ("NVIDIA NIM Tier 6", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_tier6(user_message, combined_results)),
-        ("DeepSeek", bool(DEEPSEEK_API_KEY), lambda: ask_deepseek(user_message, combined_results)),
         ("OpenRouter", bool(OPENROUTER_API_KEY), lambda: ask_openrouter(user_message, combined_results)),
         ("Pollinations", True, lambda: ask_pollinations(user_message, combined_results)),
     ]
 
     # Filter available, then sort by health descending
-    available = [(n, a, f, _provider_health_scores.get(n, 50)) for n, a, f in raw_providers if a]
+    available = [(n, a, f, _provider_health_scores.get(n, 100)) for n, a, f in raw_providers if a]
     available.sort(key=lambda x: x[3], reverse=True)
 
+    _failed_providers = []
     for provider_name, _is_available, fn, health in available:
         if not _provider_available(provider_name):
             _debug(f"Skipping {provider_name} (backoff/disabled)")
@@ -2664,16 +3186,31 @@ def ask_with_tools(user_message: str) -> str:
         if health < 30:
             _debug(f"Skipping {provider_name} (low health: {health})")
             continue
+        _debug(f"Using {provider_name} fallback (health={health})...")
         try:
-            _debug(f"Using {provider_name} fallback (health={health})...")
             reply = _retry(fn, max_retries=2)
             _last_provider_used = provider_name.lower().replace(" ", "_")
             _record_provider_success(provider_name)
             return reply
         except Exception as e:
             _debug(f"{provider_name} fallback failed: {e}")
-            _record_provider_failure(provider_name)
+            _handle_provider_failure(provider_name, e)
+            _failed_providers.append(f"{provider_name}: {e}")
 
+    # ── Last resort: on-device NN provider (never raises, works fully offline) ──
+    if not JARVIS_MOCK_PROVIDERS:
+        try:
+            _local_offline_intent, _local_offline_conf = _local_intent_predict(user_message)
+            reply = ask_local_offline(user_message, combined_results)
+            _last_provider_used = "local_nn"
+            _debug(f"[Local NN] Offline reply (intent={_local_offline_intent}, conf={_local_offline_conf:.2f})")
+            return reply
+        except Exception as e:
+            _debug(f"[Local NN] Offline provider failed: {e}")
+
+    if _failed_providers:
+        details = "; ".join(_failed_providers)
+        return f"All configured AI providers are currently unavailable. Provider errors: {details}. Please try again shortly."
     return "All configured AI providers are currently unavailable. Please try again shortly."
 
 
@@ -2902,6 +3439,8 @@ def process(text):
     _tool_call_names.clear()
     _current_request_id = generate_request_id()
     _start_time = time.time()
+    # Clear intent cache for new turn
+    conversation_context.intent_cache.clear()
     text = _sanitize_user_message(text)
     t = text.lower()
 
@@ -3032,6 +3571,15 @@ def process(text):
                 forget_memory(keyword)
                 return f"Done, forgotten anything related to '{keyword}'."
 
+    # Explicit summarize command
+    if re.search(r"\bsummar(iz|is)e\b.*(conversation|chat|history|discussion)", t) or re.search(
+        r"(conversation|chat|history).*\bsummar(iz|is)e\b", t
+    ):
+        summary = _summarize_conversation(recent_turns=20)
+        if summary:
+            return f"Here's a summary of our recent conversation:\n\n{summary}"
+        return "I couldn't generate a summary right now."
+
     if _is_unknown_capability(text):
         learner.learn_capability(text)
         return "I don't know how to do that yet, but I'm figuring it out. In the meantime, is there anything else I can help with?"
@@ -3161,6 +3709,16 @@ def process(text):
     conversation.append({"role": "user", "content": text})
     conversation.append({"role": "assistant", "content": reply})
 
+    # Periodic LLM conversation summarization (every 20 turns) to keep context compact
+    try:
+        if JARVIS_LLM_FIRST and len(conversation) % 40 == 0:
+            summary = _summarize_conversation(recent_turns=10)
+            if summary:
+                _debug(f"[Summarizer] Inserted summary: {summary[:100]}")
+                add_to_vector_memory(f"Conversation summary: {summary}", category="summary")
+    except Exception as _sum_err:
+        _debug(f"[Summarizer] Failed: {_sum_err}")
+
     # Update conversation context
     try:
         _ctx_elapsed = time.time() - _start_time
@@ -3254,4 +3812,6 @@ def get_last_tool_calls() -> list[str]:
     """Return unique tool names called in the last process() invocation."""
     seen: set = set()
     return [t for t in _tool_call_names if not (t in seen or seen.add(t))]
+
+
 

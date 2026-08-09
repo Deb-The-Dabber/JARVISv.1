@@ -251,7 +251,7 @@ def _format_citations(results: list[dict]) -> tuple[str, list[dict]]:
 # PUBLIC API
 # ─────────────────────────────────────────────
 def _get_collection(collection_name: str = DEFAULT_COLLECTION):
-    global _client
+    global _client, _bm25_dirty
     with _lock:
         if collection_name in _collections:
             return _collections[collection_name]
@@ -260,10 +260,31 @@ def _get_collection(collection_name: str = DEFAULT_COLLECTION):
         os.makedirs(RAG_DB_PATH, exist_ok=True)
         if _client is None:
             _client = chromadb.PersistentClient(path=RAG_DB_PATH)
-        collection = _client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
+        try:
+            collection = _client.get_collection(name=collection_name)
+        except Exception:
+            collection = None
+        if collection is not None:
+            try:
+                peek = collection.peek(limit=1, include=["embeddings"])
+                stored = peek.get("embeddings") or []
+                if stored:
+                    expected_dim = len(_embedding_function(["dimension check"])[0])
+                    if len(stored[0]) != expected_dim:
+                        print(
+                            f"  RAG collection dimension mismatch "
+                            f"({len(stored[0])} -> {expected_dim}), recreating collection."
+                        )
+                        _client.delete_collection(name=collection_name)
+                        collection = None
+                        _bm25_dirty = True
+            except Exception:
+                pass
+        if collection is None:
+            collection = _client.create_collection(
+                name=collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
         _collections[collection_name] = collection
         return collection
 

@@ -12,3 +12,4 @@ node_modules/
 *.sqlite
 *.ckpt
 *.pt
+.jsf_pids

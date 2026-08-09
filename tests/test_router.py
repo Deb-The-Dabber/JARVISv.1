@@ -1,3 +1,12 @@
+import os
+
+# These are keyword-routing unit tests — make them deterministic. The local NN
+# fast-path and LLM-first classification have their own coverage
+# (tests/unit/test_local_nn.py, tests/eval/golden_set.jsonl); letting them run
+# here makes results depend on provider health and live LLM responses.
+os.environ["JARVIS_LOCAL_INTENT_ENABLED"] = "0"
+os.environ["JARVIS_LLM_FIRST"] = "0"
+
 from brain import CODING_KEYWORDS, TOOL_USE_KEYWORDS, classify_intent
 
 

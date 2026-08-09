@@ -1,108 +1,244 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../../stores/useAppStore';
-import { useAuthStore } from '../../stores/useAuthStore';
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+const ACTIVE_TOOLS = [
+  'get_weather_detailed', 'web_search', 'open_app',
+  'spotify_play_song', 'set_timer', 'send_imessage',
+  'get_calendar_events', 'run_terminal_command',
+  'take_screenshot', 'organize_downloads',
+  'read_screen', 'get_recap',
+];
+
+const SAFETY_COLORS: Record<string, string> = {
+  ALLOWED: 'var(--success, #4caf50)',
+  BLOCKED: 'var(--danger, #f44336)',
+  CONFIRMED_BY_USER: 'var(--accent, #4fc3f7)',
+  DENIED_BY_USER: 'var(--warning, #ff9800)',
+  EXECUTED: 'var(--fg-dim)',
+};
 
 export function LeftSidebar() {
-  const { providerHealth, setProviderHealth, activities, addActivity, safetyBanner, showSafetyBanner, hideSafetyBanner, connected, setConnected, fallbackMode, setFallbackMode } = useStore();
-  const { isAuthenticated } = useAuthStore();
+  const { setProviderHealth } = useStore();
   const [apiKeyValid, setApiKeyValid] = useState(false);
   const [remoteKey, setRemoteKey] = useState('');
 
-  useEffect(() => {
-    const checkApiKey = async () => {
-      const stored = localStorage.getItem('jarvis-api-key');
-      if (stored) {
-        try {
-          const res = await fetch(`${import.meta.env.VITE_API_URL}/api/key`, {
-            headers: { 'X-Api-Key': stored }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            setApiKeyValid(true);
-            setRemoteKey(data.api_key || stored);
-            document.getElementById('remoteStatusText')!.textContent = '✅ Connected';
-            document.getElementById('remoteKeyDisplay')!.textContent = data.api_key || 'no key';
-            document.getElementById('apiKeyInputRow')!.style.display = 'none';
-            if (!stored && data.api_key) {
-              localStorage.setItem('jarvis-api-key', data.api_key);
-            }
-          } else {
-            document.getElementById('remoteStatusText')!.textContent = '❌ Invalid key';
-            document.getElementById('apiKeyInputRow')!.style.display = 'block';
-          }
-        } catch(e) {
-          document.getElementById('remoteStatusText')!.textContent = '❌ Invalid key';
-          document.getElementById('apiKeyInputRow')!.style.display = 'block';
-        }
+  const checkApiKey = async () => {
+    const stored = localStorage.getItem('jarvis-api-key');
+    const statusEl = document.getElementById('remoteStatusText');
+    const keyEl = document.getElementById('remoteKeyDisplay');
+    const rowEl = document.getElementById('apiKeyInputRow');
+    if (!stored) {
+      if (statusEl) statusEl.textContent = '❌ No key';
+      if (rowEl) rowEl.style.display = 'block';
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/api/key`, { headers: { 'X-Api-Key': stored } });
+      if (res.ok) {
+        const data = await res.json();
+        setApiKeyValid(true);
+        const key = data.api_key || stored;
+        setRemoteKey(key);
+        if (statusEl) statusEl.textContent = '✅ Connected';
+        if (keyEl) keyEl.textContent = key;
+        if (rowEl) rowEl.style.display = 'none';
+        if (!stored && data.api_key) localStorage.setItem('jarvis-api-key', data.api_key);
       } else {
-        document.getElementById('remoteStatusText')!.textContent = '❌ No key';
-        document.getElementById('apiKeyInputRow')!.style.display = 'block';
+        if (statusEl) statusEl.textContent = '❌ Invalid key';
+        if (rowEl) rowEl.style.display = 'block';
       }
-    };
-    const fetchSystem = async () => {
-      try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/system`);
-        if (res.ok) {
-          const data = await res.json();
-          // Update UI values directly (matches existing DOM IDs)
-          const cpuPct = data.cpu?.pct ?? 0;
-          const ramPct = data.ram?.pct ?? 0;
-          const diskFree = data.disk?.free ?? 0;
-          const diskTotal = data.disk?.total ?? 0;
-          document.getElementById('cpuVal')!.textContent = `${cpuPct?.toFixed(0) ?? '--'}%`;
-          document.getElementById('cpuBar')!.style.width = `${cpuPct ?? 0}%`;
-          document.getElementById('ramVal')!.textContent = `${ramPct?.toFixed(0) ?? '--'}%`;
-          document.getElementById('ramBar')!.style.width = `${ramPct ?? 0}%`;
-          document.getElementById('diskVal')!.textContent = `${diskFree?.toFixed(0) ?? '--'} GB`;
-          // Approximate usage bar (e.g., free/total)
-          const diskUsage = diskTotal ? ((diskTotal - diskFree) / diskTotal) * 100 : 0;
-          document.getElementById('diskBar')!.style.width = `${diskUsage}%`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = '❌ Invalid key';
+      if (rowEl) rowEl.style.display = 'block';
+    }
+  };
+
+  const fetchSystem = async () => {
+    try {
+      const res = await fetch(`${API}/system`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const cpu = Math.round(data.cpu_percent || 0);
+      const ram = Math.round(data.ram_percent || 0);
+      const diskFree = data.disk_free_gb || 0;
+      const diskTotal = data.disk_total_gb || 1;
+      const diskPct = Math.round((1 - diskFree / diskTotal) * 100);
+
+      const cpuVal = document.getElementById('cpuVal');
+      const cpuBar = document.getElementById('cpuBar');
+      if (cpuVal) cpuVal.textContent = `${cpu}%`;
+      if (cpuBar) cpuBar.style.width = `${cpu}%`;
+
+      const ramVal = document.getElementById('ramVal');
+      const ramBar = document.getElementById('ramBar');
+      if (ramVal) ramVal.textContent = `${ram}%`;
+      if (ramBar) ramBar.style.width = `${ram}%`;
+
+      const diskVal = document.getElementById('diskVal');
+      const diskBar = document.getElementById('diskBar');
+      if (diskVal) diskVal.textContent = `${diskFree}GB free`;
+      if (diskBar) diskBar.style.width = `${diskPct}%`;
+    } catch (e) {
+      console.error('Failed to fetch system stats', e);
+    }
+  };
+
+  const fetchProviderHealth = async () => {
+    try {
+      const res = await fetch(`${API}/health/providers`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const tbody = document.getElementById('providerHealthBody');
+      if (!tbody) return;
+
+      const entries = Object.entries(data).map(([name, h]) => {
+        const entry = h as Record<string, any>;
+        const health = entry.health_score ?? 100;
+        const color = health > 70 ? '#4caf50' : health > 30 ? '#ff9800' : '#f44336';
+        const circuit = entry.circuit_open ? '🔴' : '🟢';
+        return {
+          name, health, color, circuit,
+          successes: entry.successes || 0,
+          failures: entry.failures || 0,
+          latency: entry.avg_latency ? `${(entry.avg_latency * 1000).toFixed(0)}ms` : '-',
+        };
+      });
+
+      setProviderHealth(entries as any);
+
+      tbody.innerHTML = entries.length
+        ? entries.map((e) => `
+            <tr>
+              <td style="color:${e.color}">${e.circuit} ${e.name}</td>
+              <td style="text-align:right;color:${e.color}">${e.health}%</td>
+              <td style="text-align:right;">${e.successes}/${e.failures}</td>
+              <td style="text-align:right;">${e.latency}</td>
+            </tr>`).join('')
+        : '<tr><td colspan="4">No data yet</td></tr>';
+    } catch (e) {
+      const tbody = document.getElementById('providerHealthBody');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="4" style="color:#f44336;">Offline</td></tr>';
+    }
+  };
+
+  const fetchMemoryStatus = async () => {
+    try {
+      const res = await fetch(`${API}/memory/stats`);
+      if (!res.ok) return;
+      const d = await res.json();
+      const el = document.getElementById('memoryStatus');
+      if (el) el.innerHTML = `
+        <div>Facts: ${d.explicit_memories ?? '?'} entries</div>
+        <div>Vector: ${d.vector_entries ?? '?'} chunks</div>
+        <div>RAG: ${d.rag_chunks ?? '?'} doc chunks</div>
+        <div>Graph: ${d.graph_entities ?? '?'} entities</div>
+        <div>Procedures: ${d.procedures ?? '?'} routines</div>
+        <div>Associations: ${d.associations ?? '?'} pairs</div>`;
+    } catch (e) {}
+  };
+
+  const fetchSafetyLog = async () => {
+    try {
+      const res = await fetch(`${API}/audit`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const logs = (data.logs || []).slice(0, 8);
+      const el = document.getElementById('safetyLog');
+      if (!el) return;
+      if (!logs.length) {
+        el.innerHTML = 'No actions logged yet.';
+        return;
+      }
+      el.innerHTML = logs.map((l: any) => {
+        const color = SAFETY_COLORS[l.decision] || 'var(--fg-dim)';
+        return `<div style="color:${color}">${l.time ? l.time.slice(11, 16) : '--:--'} ${l.tool} → ${l.decision}</div>`;
+      }).join('');
+    } catch (e) {}
+  };
+
+  const fetchTools = () => {
+    const el = document.getElementById('toolsList');
+    if (el) el.innerHTML = ACTIVE_TOOLS.map((t) => `<div>◆ ${t}</div>`).join('');
+  };
+
+  const fetchLearner = async () => {
+    try {
+      const [toolsRes, statsRes] = await Promise.all([
+        fetch(`${API}/learner/tools`),
+        fetch(`${API}/learner/stats`),
+      ]);
+      const tools = await toolsRes.json();
+      const stats = await statsRes.json();
+
+      const statsEl = document.getElementById('learnerStats');
+      if (statsEl) {
+        statsEl.innerHTML = `<b>${stats.learned_tools_count || 0}</b> learned tool(s) · <b>${stats.total_audit_actions || 0}</b> total actions`;
+        if (stats.top_tools && stats.top_tools.length) {
+          statsEl.innerHTML += '<br><span style="font-size:0.6rem;">Top tools: ' + stats.top_tools.slice(0, 5).map((t: any) => t.tool).join(', ') + '</span>';
         }
-      } catch (e) {
-        console.error('Failed to fetch system stats', e);
       }
-    };
-    const fetchProviderHealth = async () => {
-      try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/health/providers`);
-        if (res.ok) {
-          const data = await res.json();
-          // Convert dict to array of entries
-          const entries = Object.entries(data).map(([name, entry]) => ({ name, ...(entry as Record<string, any>) }));
-          setProviderHealth(entries);
+
+      const toolsEl = document.getElementById('learnerTools');
+      if (toolsEl) {
+        if (!tools.tools || !tools.tools.length) {
+          toolsEl.innerHTML = '<span style="font-size:0.6rem;">No learned tools yet.</span>';
+        } else {
+          toolsEl.innerHTML = tools.tools.map((t: any) =>
+            `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;">
+              <span style="flex:1;"><b>${t.name}</b> <span style="font-size:0.55rem;color:var(--warning);">${t.task || ''}</span></span>
+              <button class="btn btn-ghost" onclick="window.deleteLearnedTool && window.deleteLearnedTool('${t.name}')" style="font-size:0.55rem;padding:1px 6px;">×</button>
+            </div>`).join('');
         }
-      } catch (e) {
-        console.error('Failed to fetch provider health', e);
       }
-    };
-    // Run them
+    } catch (e) {
+      console.warn('Failed to load learner data:', e);
+    }
+  };
+
+  useEffect(() => {
     checkApiKey();
     fetchSystem();
     fetchProviderHealth();
-  }, [isAuthenticated]);
+    fetchMemoryStatus();
+    fetchSafetyLog();
+    fetchTools();
+    fetchLearner();
+
+    const interval = setInterval(() => {
+      fetchSystem();
+      fetchProviderHealth();
+      fetchMemoryStatus();
+      fetchSafetyLog();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   const oauthConnect = (provider: string) => {
-    const base = import.meta.env.VITE_API_URL || '';
-    window.location.href = `${base}/oauth/authorize/${provider}`;
+    window.location.href = `${API}/oauth/authorize/${provider}`;
   };
 
   const triggerLearning = () => {
-    const input = document.getElementById('learnerTaskInput') as HTMLInputElement;
+    const input = document.getElementById('learnerTaskInput') as HTMLInputElement | null;
     if (!input?.value) return;
-    fetch(`${import.meta.env.VITE_API_URL}/learner/trigger`, {
+    fetch(`${API}/learner/trigger`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: input.value })
-    }).then(() => { input.value = ''; });
+      body: JSON.stringify({ prompt: input.value }),
+    }).then(() => {
+      input.value = '';
+      fetchLearner();
+    });
   };
 
   const saveApiKey = () => {
-    const input = document.getElementById('apiKeyInput') as HTMLInputElement;
+    const input = document.getElementById('apiKeyInput') as HTMLInputElement | null;
     const key = input?.value;
     if (!key) return;
     localStorage.setItem('jarvis-api-key', key);
     checkApiKey();
-    input.value = '';
+    input!.value = '';
   };
 
   const copyApiKey = () => {
@@ -114,37 +250,6 @@ export function LeftSidebar() {
   const copyRemoteKey = () => {
     navigator.clipboard.writeText(remoteKey);
     alert('Copied!');
-  };
-
-  const checkApiKey = async () => {
-    const stored = localStorage.getItem('jarvis-api-key');
-    if (stored) {
-      try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/key`, {
-          headers: { 'X-Api-Key': stored }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setApiKeyValid(true);
-          setRemoteKey(data.api_key || stored);
-          document.getElementById('remoteStatusText')!.textContent = '✅ Connected';
-          document.getElementById('remoteKeyDisplay')!.textContent = data.api_key || 'no key';
-          document.getElementById('apiKeyInputRow')!.style.display = 'none';
-          if (!stored && data.api_key) {
-            localStorage.setItem('jarvis-api-key', data.api_key);
-          }
-        } else {
-          document.getElementById('remoteStatusText')!.textContent = '❌ Invalid key';
-          document.getElementById('apiKeyInputRow')!.style.display = 'block';
-        }
-      } catch(e) {
-        document.getElementById('remoteStatusText')!.textContent = '❌ Invalid key';
-        document.getElementById('apiKeyInputRow')!.style.display = 'block';
-      }
-    } else {
-      document.getElementById('remoteStatusText')!.textContent = '❌ No key';
-      document.getElementById('apiKeyInputRow')!.style.display = 'block';
-    }
   };
 
   return (
@@ -160,7 +265,7 @@ export function LeftSidebar() {
           <div className="stat-bar"><div className="stat-fill" id="ramBar" style={{ width: '0%' }}></div></div>
         </div>
         <div className="stat-item">
-          <div className="stat-label">DISK <span id="diskVal">-- GB</span></div>
+          <div className="stat-label">DISK <span id="diskVal">-- GB free</span></div>
           <div className="stat-bar"><div className="stat-fill" id="diskBar" style={{ width: '0%' }}></div></div>
         </div>
       </div>
@@ -200,7 +305,7 @@ export function LeftSidebar() {
         <div>Status: <span id="remoteStatusText">checking...</span></div>
         <div>Key: <span id="remoteKeyDisplay" style={{ fontSize: '0.55rem', wordBreak: 'break-all' }}>---</span></div>
         <div id="apiKeyInputRow" style={{ display: 'none', marginTop: '6px' }}>
-          <input type="password" id="apiKeyInput" placeholder="Paste API key" 
+          <input type="password" id="apiKeyInput" placeholder="Paste API key"
                  style={{ width: '100%', fontSize: '0.6rem', padding: '4px 8px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--fg)', marginBottom: '4px' }} />
           <div style={{ display: 'flex', gap: '4px' }}>
             <button className="btn btn-primary" onClick={saveApiKey} style={{ fontSize: '0.6rem', padding: '4px 8px', flex: '1' }}>Save</button>

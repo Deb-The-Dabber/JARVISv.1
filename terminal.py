@@ -32,6 +32,27 @@ from trigger_engine import start as triggers_start
 from tts import speak, stop_speaking, wait_for_speech
 
 _INPUT_DEVICE_INDEX = None
+_last_alert_ts = time.time()
+
+
+def _flush_proactive_alerts():
+    """Print proactive alerts that arrived since the last prompt."""
+    global _last_alert_ts
+    try:
+        from event_bus import get_recent
+
+        events = get_recent("proactive_alert", 10)
+        for ev in events:
+            ts = ev.get("timestamp", 0) or 0
+            if ts <= _last_alert_ts:
+                continue
+            msg = ev.get("message", "")
+            if msg:
+                print(f"\n  [Alert] {msg}")
+        if events:
+            _last_alert_ts = events[-1].get("timestamp", 0) or _last_alert_ts
+    except Exception:
+        pass
 
 
 def _resolve_input_device():
@@ -483,7 +504,8 @@ def main():
         print("  Press Ctrl+C to quit.\n")
         try:
             while True:
-                time.sleep(0.1)
+                _flush_proactive_alerts()
+                time.sleep(0.5)
         except KeyboardInterrupt:
             print("\nGoodbye!")
             speak("Goodbye.")
@@ -496,6 +518,7 @@ def main():
 
         while True:
             try:
+                _flush_proactive_alerts()
                 # Mode-specific input handling
                 if _current_mode == InputMode.PASTE:
                     raw_line = input("Paste → ")
@@ -872,7 +895,7 @@ def main():
                         if provider == "huggingface":
                             continue
                         backoff = _provider_backoff_until.get(provider, 0)
-                        health = _provider_health_scores.get(provider, 50)
+                        health = _provider_health_scores.get(provider, 100)
                         failures = _provider_consecutive_failures.get(provider, 0)
                         if backoff > now:
                             remaining = int(backoff - now)

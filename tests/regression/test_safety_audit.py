@@ -25,7 +25,7 @@ class TestSafetyAudit:
         assert "logs" in data
         logs = data["logs"]
         assert isinstance(logs, list)
-        valid_decisions = ["ALLOWED", "EXECUTED", "DENIED", "BLOCKED", "NEEDS_CONFIRMATION"]
+        valid_decisions = ["ALLOWED", "EXECUTED", "DENIED", "BLOCKED", "NEEDS_CONFIRMATION", "DENIED_BY_USER", "CONFIRMED_BY_USER"]
         for entry in logs:
             assert "decision" in entry, f"Missing 'decision' in entry: {entry}"
             assert entry["decision"] in valid_decisions, f"Unknown decision: {entry['decision']}"
