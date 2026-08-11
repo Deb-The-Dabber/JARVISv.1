@@ -21,6 +21,24 @@ _repopulated = False
 _repopulate_done = threading.Event()
 
 
+def _disable_tqdm_mp_lock() -> None:
+    """Prevent tqdm from creating a multiprocessing.RLock for its write lock.
+
+    tqdm's progress bar (e.g. MiniLM "Loading weights" bar) calls
+    multiprocessing.RLock() at first render. That spawns the multiprocessing
+    resource_tracker daemon, which can hang at interpreter exit on macOS
+    (holds the inherited stderr pipe open -> process appears hung, with a
+    "leaked semaphore objects" warning). The threading lock alone is
+    sufficient for our single-process use.
+    """
+    try:
+        import tqdm.std
+
+        tqdm.std.TqdmDefaultWriteLock.mp_lock = None
+    except Exception:
+        pass
+
+
 def _get_embedding(text: str) -> list:
     """Get embedding using local all-MiniLM-L6-v2 (Phase 2.2: MiniLM-only)."""
     global _embedding_mode_printed, _local_embedding_model, _embedding_failed
@@ -32,6 +50,7 @@ def _get_embedding(text: str) -> list:
         if _local_embedding_model is None:
             from sentence_transformers import SentenceTransformer
 
+            _disable_tqdm_mp_lock()
             _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
         if not _embedding_mode_printed:
             print("  Embeddings: all-MiniLM-L6-v2 (384-dim)")
@@ -519,6 +538,7 @@ def prewarm_minilm():
     try:
         from sentence_transformers import SentenceTransformer
 
+        _disable_tqdm_mp_lock()
         _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
         if not _embedding_mode_printed:
             print("  Local embeddings: all-MiniLM-L6-v2 (pre-warmed)")
@@ -532,6 +552,7 @@ def get_local_embedding_model():
     if _local_embedding_model is None:
         from sentence_transformers import SentenceTransformer
 
+        _disable_tqdm_mp_lock()
         _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _local_embedding_model
 

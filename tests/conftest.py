@@ -2,6 +2,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 import pytest
@@ -17,9 +18,24 @@ os.environ.setdefault("JARVIS_LLM_FIRST", "0")
 # brain's import-time thresholds dict matches regardless of collection order.
 os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85")
 os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE_CHAT", "0.80")
+# Isolate persisted provider health (circuit breaker / backoff) from the real
+# ~/.jarvis/provider_health.json. Without this, a real-world outage (or an
+# earlier failing test run) leaves circuits open that make provider-fallback
+# tests skip Nemotron/Gemini deterministically and fail.
+os.environ.setdefault(
+    "JARVIS_PROVIDER_HEALTH_FILE",
+    os.path.join(tempfile.gettempdir(), "jarvis_test_provider_health.json"),
+)
+# Same for the Gemini daily-usage counter — the real file's quota state would
+# otherwise disable Gemini for every test server mid-suite.
+os.environ.setdefault(
+    "JARVIS_GEMINI_USAGE_FILE",
+    os.path.join(tempfile.gettempdir(), "jarvis_test_gemini_usage.json"),
+)
+_TEST_ISOLATION_NS = f"{os.getpid()}_{int(time.time())}"
 
 
-def _free_port(port: int = 8000):
+def _free_port(port: int = 8002):
     """Kill any process listening on the given port."""
     try:
         result = subprocess.run(
@@ -52,12 +68,17 @@ def _stop_proc(proc: subprocess.Popen):
 
 @pytest.fixture(scope="session")
 def jarvis_server():
-    _free_port(8000)
+    _free_port(8002)
     env = os.environ.copy()
     env["JARVIS_TTS_SILENT"] = "1"
-    # Eval mode: auto-confirm tools so regression tests exercise routing, not the
-    # interactive sandbox (sandbox behavior has its own dedicated unit tests).
     env["JARVIS_EVAL_MODE"] = "1"
+    env["JARVIS_PORT"] = "8002"
+    env["JARVIS_PROVIDER_HEALTH_FILE"] = os.path.join(
+        tempfile.gettempdir(), f"jarvis_test_health_{_TEST_ISOLATION_NS}.json"
+    )
+    env["JARVIS_GEMINI_USAGE_FILE"] = os.path.join(
+        tempfile.gettempdir(), f"jarvis_test_gemini_{_TEST_ISOLATION_NS}.json"
+    )
     proc = subprocess.Popen(
         ["python", "server.py"],
         env=env,
@@ -66,7 +87,7 @@ def jarvis_server():
     )
     for _ in range(60):
         try:
-            r = requests.get("http://localhost:8000/health", timeout=2)
+            r = requests.get("http://localhost:8002/health", timeout=2)
             if r.status_code == 200:
                 break
         except Exception:
@@ -75,7 +96,7 @@ def jarvis_server():
     else:
         _stop_proc(proc)
         raise RuntimeError("Server failed to start within 60s")
-    yield "http://localhost:8000"
+    yield "http://localhost:8002"
     _stop_proc(proc)
 
 
@@ -212,6 +233,13 @@ def mock_api(mock_provider_server):
     env = os.environ.copy()
     env["JARVIS_TTS_SILENT"] = "1"
     env["JARVIS_MOCK_PROVIDERS"] = "1"
+    env["JARVIS_PORT"] = "8002"
+    env["JARVIS_PROVIDER_HEALTH_FILE"] = os.path.join(
+        tempfile.gettempdir(), f"jarvis_test_health_{_TEST_ISOLATION_NS}_{time.time_ns()}.json"
+    )
+    env["JARVIS_GEMINI_USAGE_FILE"] = os.path.join(
+        tempfile.gettempdir(), f"jarvis_test_gemini_{_TEST_ISOLATION_NS}_{time.time_ns()}.json"
+    )
     env["MOCK_PROVIDER_URL"] = f"http://127.0.0.1:{mock_port}"
     for key in [
         "NVIDIA_NEMOTRON_API_KEY",
@@ -221,6 +249,7 @@ def mock_api(mock_provider_server):
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
         "KIMI_API_KEY",
+        "GOOGLE_GENAI_API_KEY",
         "TAVILY_API_KEY",
         "ELEVENLABS_API_KEY",
     ]:
@@ -234,7 +263,7 @@ def mock_api(mock_provider_server):
     )
     for _ in range(60):
         try:
-            r = requests.get("http://localhost:8000/health", timeout=2)
+            r = requests.get("http://localhost:8002/health", timeout=2)
             if r.status_code == 200:
                 break
         except Exception:
@@ -249,13 +278,13 @@ def mock_api(mock_provider_server):
     class MockAPI:
         def ask(self, text: str, timeout=180):
             return session.post(
-                "http://localhost:8000/ask",
+                "http://localhost:8002/ask",
                 json={"text": text},
                 timeout=timeout,
             )
 
         def get(self, endpoint: str):
-            return session.get(f"http://localhost:8000{endpoint}", timeout=30)
+            return session.get(f"http://localhost:8002{endpoint}", timeout=30)
 
         def close(self):
             session.close()

@@ -13,7 +13,8 @@ from server import app
 # ─────────────────────────────────────────────
 def start_server():
     # We keep log_level="info" so you can see and COPY incoming requests!
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info", use_colors=True)
+    port = int(os.getenv("JARVIS_PORT", "8000"))
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info", use_colors=True)
 
 
 print("  Starting backend server thread...")
@@ -24,7 +25,7 @@ server_thread.start()
 print("  Waiting for Jarvis backend to respond...")
 for i in range(20):
     try:
-        urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=1)
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
         print("  Backend is ONLINE!")
         break
     except Exception:

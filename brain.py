@@ -27,6 +27,7 @@ from memory import (
     get_recent_summaries,
     save_memory,
 )
+from decision_log import new_request_id, log_decision
 from tool_parser import (
     detect_and_parse,
     strip_json_tool_calls,
@@ -141,7 +142,7 @@ def _llm_choose(prompt: str, valid_options: set[str] | None = None, max_retries:
     if JARVIS_MOCK_PROVIDERS:
         return None
     try:
-        resp = _retry(lambda: ask_nemotron_ultra(prompt, []), max_retries=max_retries).strip().lower()
+        resp = _retry(lambda: ask_nemotron_ultra(prompt, [], timeout=45), max_retries=max_retries).strip().lower()
         if not resp:
             return None
         if valid_options is not None and resp not in valid_options:
@@ -229,18 +230,33 @@ def _try_local_routing(user_message: str, intent: str | None = None) -> str | No
 
 
 def _classify_error(error_text: str) -> str | None:
-    """LLM‑first error classification. Returns one of a small set of labels or ``None``.
+    """Deterministic error classification from error-text patterns.
+
     Labels: rate_limit, auth_error, timeout, quota, internal, unknown.
+    Replaces the former LLM-first classification call (a full Nemotron
+    round-trip per provider failure) with pattern matching already used
+    elsewhere (see ``_retry`` and ``_ask_nim_loop``).
     """
-    if not JARVIS_LLM_FIRST:
-        return None
-    prompt = (
-        "Classify the following provider error into one of these categories: "
-        "rate_limit, auth_error, timeout, quota, internal, unknown. "
-        "Respond with only the category name.\n\n"
-        f"Error: {error_text}\n"
-    )
-    return _llm_choose(prompt)
+    err = (error_text or "").lower()
+    if not err:
+        return "unknown"
+    if "429" in err or "rate limit" in err or "rate_limit" in err or "too many requests" in err:
+        return "rate_limit"
+    if "401" in err or "403" in err or "unauthorized" in err or "invalid api key" in err:
+        return "auth_error"
+    if "permission denied" in err or "forbidden" in err:
+        return "auth_error"
+    if "timeout" in err or "timed out" in err or "read timeout" in err or "connection" in err:
+        return "timeout"
+    if "connect error" in err or "econnreset" in err or "econnrefused" in err or "socketerror" in err:
+        return "timeout"
+    if "quota" in err or "insufficient_quota" in err or "exceeded your current quota" in err:
+        return "quota"
+    if "500" in err or "502" in err or "503" in err or "504" in err or "unavailable" in err:
+        return "internal"
+    if "overloaded" in err or "internal server error" in err or "server error" in err:
+        return "internal"
+    return "unknown"
 
 def _handle_provider_failure(provider_name: str, exc: Exception) -> None:
     """Centralized failure handling that uses LLM error classification to decide backoff.
@@ -291,8 +307,8 @@ _genai_client = None
 _gemini_backoff_until = 0.0
 _last_model_used = "unknown"
 _last_provider_used = "unknown"
-_GEMINI_USAGE_FILE = os.path.expanduser("~/.jarvis_gemini_usage.json")
-_PROVIDER_HEALTH_FILE = os.path.expanduser("~/.jarvis/provider_health.json")
+_GEMINI_USAGE_FILE = os.path.expanduser(os.getenv("JARVIS_GEMINI_USAGE_FILE", "~/.jarvis_gemini_usage.json"))
+_PROVIDER_HEALTH_FILE = os.path.expanduser(os.getenv("JARVIS_PROVIDER_HEALTH_FILE", "~/.jarvis/provider_health.json"))
 _provider_backoff_until = {}
 _provider_consecutive_failures = {}
 _provider_usage_count = {}
@@ -495,6 +511,43 @@ TOOL_USE_KEYWORDS = {
     "ip",
 }
 
+CAD_KEYWORDS = {
+    "onshape",
+    "cad",
+    "part studio",
+    "partstudio",
+    "feature",
+    "features",
+    "extrude",
+    "fillet",
+    "chamfer",
+    "hole",
+    "sketch",
+    "plane",
+    "assembly",
+    "assembly",
+    "drawing",
+    "document",
+    "workspace",
+    "element",
+    "dimension",
+    "parameter",
+    "sketch",
+    "constraint",
+    "mate",
+    "part",
+    "body",
+    "mass",
+    "volume",
+    "diameter",
+    "radius",
+    "depth",
+    "thickness",
+    "height",
+    "width",
+    "length",
+}
+
 
 def _local_intent_predict(text: str) -> tuple[str | None, float]:
     """Predict intent with the on-device NN router. Returns (None, 0.0) when disabled/unavailable."""
@@ -582,6 +635,14 @@ def classify_intent(text: str) -> str:
             _debug(f"[Intent] classify_intent('{text}'): 'self_mod' — keyword + verb")
             return "self_mod"
 
+    # CAD / Onshape — keyword-first detection before LLM (like self_mod)
+    # Use word boundaries to avoid false positives like "documentation" containing "document"
+    import re
+    cad_pattern = re.compile(r"\b(" + "|".join(re.escape(k) for k in CAD_KEYWORDS) + r")\b")
+    if cad_pattern.search(t) or "cad.onshape.com" in t or "/documents/" in t:
+        _debug(f"[Intent] classify_intent('{text}'): 'cad' — CAD keyword/URL")
+        return "cad"
+
     # Memory triggers — handled directly in process(), not via tools
     memory_triggers = (
         "remember that",
@@ -615,8 +676,9 @@ def classify_intent(text: str) -> str:
         _debug(f"[Intent] classify_intent('{text}'): '{cached}' — cached")
         return cached
 
-    # Local NN fast-path — skip cloud LLM when the on-device router is confident
-    if not JARVIS_MOCK_PROVIDERS and not JARVIS_EVAL_MODE:
+    # Local NN fast-path — skip cloud LLM when the on-device router is confident.
+    # Enabled in eval mode too so evaluation measures production routing behavior.
+    if not JARVIS_MOCK_PROVIDERS:
         _local_intent, _local_conf = _local_intent_predict(text)
         if _local_intent is not None and _local_conf >= _local_intent_threshold(_local_intent):
             conversation_context.intent_cache[text] = _local_intent
@@ -636,7 +698,9 @@ def classify_intent(text: str) -> str:
                 f"User request: {text}\n"
             )
             # Use the low‑level Nemotron Ultra call to avoid routing loops
-            classification = _retry(lambda: ask_nemotron_ultra(llm_prompt, []), max_retries=2).strip().lower()
+            classification = (
+                _retry(lambda: ask_nemotron_ultra(llm_prompt, [], timeout=45), max_retries=2).strip().lower()
+            )
             if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
                 _debug(f"[Intent] LLM classification gave '{classification}'")
                 # If LLM says 'chat' but text matches reasoning patterns, defer to keyword fallback
@@ -654,6 +718,13 @@ def classify_intent(text: str) -> str:
                     return classification
         except Exception as e:
             _debug(f"[Intent] LLM classification error: {e}")
+
+    # CAD / Onshape — early detection before keyword fallback
+    import re
+    cad_pattern = re.compile(r"\b(" + "|".join(re.escape(k) for k in CAD_KEYWORDS) + r")\b")
+    if cad_pattern.search(t) or "cad.onshape.com" in t:
+        _debug(f"[Intent] classify_intent('{text}'): 'cad' — CAD keyword/URL")
+        return "cad"
 
     # Keyword fallback for remaining cases
 
@@ -812,29 +883,6 @@ def _estimate_task_complexity(text: str) -> int:
     - Whether multiple tools/files involved
     - User's explicit complexity hints
     """
-    # LLM‑first complexity estimation — ask for a 1-10 score, map to iterations
-    if JARVIS_LLM_FIRST:
-        prompt = (
-            "Rate the complexity of the following user request on a scale of 1-10. "
-            "Consider: number of implied steps, tools or files involved, ambiguity, and "
-            "whether it requires coding or research. Respond with ONLY an integer 1-10.\n\n"
-            f"User request: {text}\n"
-        )
-        score = _llm_choose(prompt)
-        if score is not None:
-            try:
-                n = int(re.search(r"\d+", score).group())
-                n = max(1, min(10, n))
-                if n >= 8:
-                    return 12
-                if n >= 6:
-                    return 8
-                if n >= 4:
-                    return 6
-                return 4
-            except Exception:
-                pass
-
     t = (text or "").lower()
 
     # Very complex: full projects, migrations, end-to-end builds
@@ -1067,7 +1115,7 @@ def _backoff_provider(provider_name: str, seconds: int = 600, exponential: bool 
     now = datetime.datetime.now().timestamp()
     _provider_backoff_until[provider_name] = now + seconds
     # circuit_open_until: separate immutable timeout — doesn't reset until cleared by success
-    circuit_seconds = max(seconds, 1800)
+    circuit_seconds = max(seconds, 300)
     h = _provider_health.setdefault(provider_name, _default_health_entry())
     h["circuit_open_until"] = now + circuit_seconds
     h["circuit_open"] = True
@@ -1166,10 +1214,18 @@ def _get_client():
 
             _genai_client = genai.Client(
                 api_key=GEMINI_API_KEY,
-                http_options=_gtypes.HttpOptions(baseUrl=MOCK_PROVIDER_URL),
+                http_options=_gtypes.HttpOptions(
+                    baseUrl=MOCK_PROVIDER_URL,
+                    timeout=45_000,
+                ),
             )
         else:
-            _genai_client = genai.Client(api_key=GEMINI_API_KEY)
+            from google.genai import types as _gtypes
+
+            _genai_client = genai.Client(
+                api_key=GEMINI_API_KEY,
+                http_options=_gtypes.HttpOptions(timeout=45_000),
+            )
         print(f"  Gemini client ready. Preferred: {', '.join(GEMINI_MODELS)}")
         return _genai_client
     except Exception as e:
@@ -1574,7 +1630,7 @@ def _sanitize_assistant_text(text: str) -> str:
     return stripped
 
 
-def ask_nemotron_ultra(user_message: str, tool_results: list[str]) -> str:
+def ask_nemotron_ultra(user_message: str, tool_results: list[str], timeout: float = 90) -> str:
     from openai import OpenAI
 
     api_key = NVIDIA_NEMOTRON_API_KEY
@@ -1615,7 +1671,7 @@ def ask_nemotron_ultra(user_message: str, tool_results: list[str]) -> str:
             },
             tools=_build_openai_tools() if not is_last_iter else [],
             tool_choice=tc,
-            timeout=90,
+            timeout=timeout,
         )
 
         if not response.choices:
@@ -1888,22 +1944,47 @@ def _print_file_change(path: str, diff: str, ins: int, dels: int):
 
 
 def _execute_tool(fn_name: str, fn_args: dict) -> str:
+    tool_start = time.time()
     # Track tool names for eval harness / audit
     _tool_call_names.append(fn_name)
     # Per-turn memoization — same tool+args within one user message
     memo_key = f"{fn_name}:{str(sorted((k, str(v)) for k, v in (fn_args or {}).items()))}"
     cached = _turn_memo_cache.get(memo_key)
     if cached is not None:
+        log_decision(
+            phase="act",
+            decision="tool_memoized",
+            decision_source="memo_cache",
+            measurable_inputs={"tool": fn_name},
+            outcome="success",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         _debug(f"[Memo] Reusing cached result for {fn_name}")
         return cached
 
     fn = TOOL_REGISTRY.get(fn_name) or _learned_tools.get(fn_name)
     if not fn:
+        log_decision(
+            phase="act",
+            decision="tool_not_found",
+            decision_source="TOOL_REGISTRY_lookup",
+            measurable_inputs={"tool": fn_name},
+            outcome="failure",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         learner.learn_capability(f"implement {fn_name}")
         return f"Tool '{fn_name}' not available yet — learning it now."
 
     validation = validate_tool_args(fn_name, fn_args)
     if isinstance(validation, str):
+        log_decision(
+            phase="act",
+            decision="tool_validation_failed",
+            decision_source="validate_tool_args",
+            measurable_inputs={"tool": fn_name, "error": validation},
+            outcome="failure",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         return validation
     fn_name, fn_args = validation
 
@@ -1928,6 +2009,12 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
             and not action_sandbox.eval_mode()
             and action_sandbox.is_selfmod(fn_name, safe_args)
         ):
+            log_decision(
+                phase="safety",
+                decision="selfmod_detected",
+                decision_source="action_sandbox.is_selfmod",
+                measurable_inputs={"tool": fn_name, "target": safe_args.get("target", "")},
+            )
             _sm = action_sandbox.resolve_selfmod(fn_name, safe_args, fn)
             if _sm["new_code"].strip() != _sm["old_code"].strip():
                 _sm_analysis = action_sandbox.analyze_selfmod(_sm["target"], _sm["old_code"], _sm["new_code"])
@@ -1938,9 +2025,25 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
                 if _sm_analysis["blocked"] or not _sm_dry["ok"]:
                     _sm_blocked = _sm_analysis["blocked"] or [_sm_dry.get("error", "dry run failed")]
                     log_audit(fn_name, safe_args, "DANGEROUS", "BLOCKED", "; ".join(_sm_blocked))
+                    log_decision(
+                        phase="safety",
+                        decision="selfmod_blocked",
+                        decision_source="action_sandbox.analyze_selfmod",
+                        measurable_inputs={"tool": fn_name, "blocked_reasons": _sm_blocked},
+                        outcome="blocked",
+                        latency_ms=int((time.time() - tool_start) * 1000),
+                    )
                     return "Self-modification refused by sandbox review: " + "; ".join(_sm_blocked)
                 action_sandbox.stage_typed(
                     fn_name, fn, safe_args, action_sandbox.confirm_text_for(_sm["target"]), _sm_preview, _sm
+                )
+                log_decision(
+                    phase="safety",
+                    decision="selfmod_staged_for_confirmation",
+                    decision_source="action_sandbox.stage_typed",
+                    measurable_inputs={"tool": fn_name, "target": _sm["target"]},
+                    outcome="pending",
+                    latency_ms=int((time.time() - tool_start) * 1000),
                 )
                 raise NeedsConfirmation(
                     fn_name,
@@ -1952,11 +2055,25 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
             return f"No change needed — {_sm['target']} already matches the requested state."
         # ── FILE WRITES → unified diff preview ──
         if fn_name in file_sandbox.WRITE_TOOLS and file_sandbox.enabled() and not file_sandbox.eval_mode():
+            log_decision(
+                phase="safety",
+                decision="file_write_detected",
+                decision_source="file_sandbox.WRITE_TOOLS",
+                measurable_inputs={"tool": fn_name, "path": safe_args.get("path", "")},
+            )
             _sb_sim = file_sandbox.simulate(fn_name, safe_args)
             if _sb_sim:
                 _sb_path, _sb_old, _sb_new = _sb_sim
                 _sb_diff = file_sandbox.make_diff(_sb_path, _sb_old, _sb_new)
                 if _sb_diff:
+                    log_decision(
+                        phase="safety",
+                        decision="file_write_staged",
+                        decision_source="file_sandbox.stage",
+                        measurable_inputs={"tool": fn_name, "path": _sb_path, "diff_lines": len(_sb_diff.splitlines())},
+                        outcome="pending",
+                        latency_ms=int((time.time() - tool_start) * 1000),
+                    )
                     file_sandbox.stage(fn_name, safe_args, _sb_path, _sb_old, _sb_new, _sb_diff)
                     _sb_ins, _sb_dels = file_sandbox.counts(_sb_diff)
                     _print_file_change(_sb_path, _sb_diff, _sb_ins, _sb_dels)
@@ -1964,11 +2081,31 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
         if action_sandbox.enabled() and not action_sandbox.eval_mode():
             # ── TERMINAL / PYTHON → real sandboxed run preview ──
             if fn_name in action_sandbox.EXEC_TOOLS:
+                log_decision(
+                    phase="safety",
+                    decision="exec_tool_detected",
+                    decision_source="action_sandbox.EXEC_TOOLS",
+                    measurable_inputs={"tool": fn_name, "command": safe_args.get("command", "")[:200]},
+                )
                 if fn_name in ("run_terminal_command", "run_command_sandboxed"):
                     _cmd_ok, _cmd_level, _cmd_reason = analyze_command(safe_args.get("command", ""))
                     if not _cmd_ok:
                         log_audit(fn_name, safe_args, "CRITICAL", "BLOCKED", _cmd_reason)
+                        log_decision(
+                            phase="safety",
+                            decision="command_blocked",
+                            decision_source="analyze_command",
+                            measurable_inputs={"tool": fn_name, "reason": _cmd_reason},
+                            outcome="blocked",
+                            latency_ms=int((time.time() - tool_start) * 1000),
+                        )
                         raise PermissionDenied(f"Command blocked: {_cmd_reason}")
+                log_decision(
+                    phase="safety",
+                    decision="exec_preview_generated",
+                    decision_source="action_sandbox.run_exec_preview",
+                    measurable_inputs={"tool": fn_name},
+                )
                 _sb_exec = action_sandbox.run_exec_preview(fn_name, safe_args)
                 print(
                     f"\n========== [Jarvis Sandbox] Preview (sandboxed run) ==========\n"
@@ -1987,6 +2124,12 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
                         fn_name, safe_args, "WARNING", action_sandbox.confirm_message(fn_name, safe_args)
                     )
             elif fn_name in action_sandbox.INTENT_PREVIEW_TOOLS:
+                log_decision(
+                    phase="safety",
+                    decision="intent_preview_generated",
+                    decision_source="action_sandbox.format_intent_preview",
+                    measurable_inputs={"tool": fn_name},
+                )
                 _sb_intent = action_sandbox.format_intent_preview(fn_name, safe_args)
                 print(
                     f"\n========== [Jarvis Sandbox] Intent preview ==========\n"
@@ -2010,23 +2153,77 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
                 f"Write to {_sb_path} (+{_sb_ins}/-{_sb_dels} lines) awaits your approval "
                 "— say yes to apply, no to cancel."
             )
+            log_decision(
+                phase="safety",
+                decision="confirmation_required",
+                decision_source="file_sandbox_or_action_sandbox",
+                measurable_inputs={"tool": fn_name, "path": _sb_path, "ins": _sb_ins, "dels": _sb_dels},
+                outcome="pending",
+                latency_ms=int((time.time() - tool_start) * 1000),
+            )
             raise NeedsConfirmation(fn_name, safe_args, "WARNING", _sb_message)
         if not _sb_gated:
+            log_decision(
+                phase="safety",
+                decision="permission_check",
+                decision_source="check_permission",
+                measurable_inputs={"tool": fn_name, "level": TOOL_PERMISSIONS.get(fn_name, "WARNING")},
+            )
             check_permission(fn_name, safe_args)
+        log_decision(
+            phase="act",
+            decision="tool_execute_start",
+            decision_source="direct_execution",
+            measurable_inputs={"tool": fn_name, "args_keys": list(safe_args.keys())},
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         _debug(f"[TOOL EXECUTE] {fn_name}({safe_args})")
         result = fn(**safe_args)
         log_audit(fn_name, safe_args, TOOL_PERMISSIONS.get(fn_name, "WARNING"), "EXECUTED")
         result_str = str(result)
+        log_decision(
+            phase="act",
+            decision="tool_execute_complete",
+            decision_source="direct_execution",
+            measurable_inputs={"tool": fn_name, "result_len": len(result_str)},
+            outcome="success",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         _debug(f"[TOOL RESULT] {fn_name}: {result_str[:200]}")
         _turn_memo_cache[memo_key] = result_str
         return result_str
     except NeedsConfirmation as e:
+        log_decision(
+            phase="safety",
+            decision="confirmation_needed",
+            decision_source="NeedsConfirmation",
+            measurable_inputs={"tool": fn_name, "level": e.level, "message": e.message[:200]},
+            outcome="pending",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         set_pending_safe(fn_name, fn, safe_args, e.level)
         return e.message
     except PermissionDenied as e:
+        log_decision(
+            phase="safety",
+            decision="permission_denied",
+            decision_source="PermissionDenied",
+            measurable_inputs={"tool": fn_name, "error": str(e)},
+            outcome="blocked",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         _speak_direct("Blocked for safety.")
         return str(e)
     except Exception as e:
+        log_decision(
+            phase="act",
+            decision="tool_error",
+            decision_source="unhandled_exception",
+            measurable_inputs={"tool": fn_name, "error": str(e)},
+            outcome="failure",
+            latency_ms=int((time.time() - tool_start) * 1000),
+            error=str(e),
+        )
         return f"Tool error: {e}"
 
 
@@ -2714,7 +2911,7 @@ def _ask_nim_loop(client, messages: list, model: str, provider_name: str = "NVID
             "messages": messages,
             "temperature": 0.7,
             "max_tokens": 1024,
-            "timeout": 60,
+            "timeout": 30,
         }
         # Always use modern tools/tool_choice format (NVIDIA deprecated functions/function_call)
         tools = _build_openai_tools()
@@ -3070,22 +3267,214 @@ Always prefer real tool results over assumptions."""
     return results, direct_answer
 
 
+def _handle_cad_request(user_message: str) -> str:
+    """Handle CAD/Onshape read requests (Phase 1: read-only)."""
+    _debug(f"[CAD] Handling request: {user_message}")
+    try:
+        from tools.onshape_tools import (
+            list_documents,
+            get_document,
+            list_elements,
+            get_features,
+            get_feature_params,
+            get_part_studio_info,
+            parse_onshape_url,
+            _extract_ids_from_message,
+            format_document_list,
+            format_feature_list,
+            format_feature_params,
+            format_part_studio_info,
+        )
+    except Exception as e:
+        _debug(f"[CAD] Import error: {e}")
+        return "Onshape tools not available."
+
+    # Try to extract document/workspace/element IDs from message
+    did = wid = eid = None
+    extracted = _extract_ids_from_message(user_message)
+    if extracted:
+        did, wid, eid = extracted
+
+    t = user_message.lower()
+
+    # 1. List documents
+    if any(k in t for k in ("list", "show", "what", "my documents", "documents")):
+        if "document" in t and ("list" in t or "show" in t or "what" in t):
+            result = list_documents(limit=20)
+            if not result.get("ok"):
+                return f"Failed to list documents: {result.get('error')}"
+            from tools.onshape_tools import format_document_list
+            return f"Your Onshape documents:\n{format_document_list(result['data'])}"
+
+    # List elements in workspace (only needs did + wid)
+    if did and wid and not eid:
+        if "element" in t or "part studio" in t or "assembly" in t or "drawing" in t:
+            if "list" in t or "show" in t or "what" in t:
+                result = list_elements(did, wid)
+                if not result.get("ok"):
+                    return f"Failed to list elements: {result.get('error')}"
+                elems = result["data"]
+                if not elems:
+                    return "No elements found in that workspace."
+                lines = ["Elements in workspace:"]
+                for e in elems:
+                    lines.append(f"  • {e.get('name', 'Unnamed')}  [{e.get('type', 'unknown')}]  id:{e.get('elementId', '')[:8]}...")
+                return "\n".join(lines)
+
+    # If we have a document URL or IDs, handle element-specific queries
+    if did and wid and eid:
+        # List elements in a document/workspace
+        if "element" in t or "part studio" in t or "assembly" in t or "drawing" in t:
+            if "list" in t or "show" in t or "what" in t:
+                result = list_elements(did, wid)
+                if not result.get("ok"):
+                    return f"Failed to list elements: {result.get('error')}"
+                elems = result["data"]
+                if not elems:
+                    return "No elements found in that workspace."
+                lines = ["Elements in workspace:"]
+                for e in elems:
+                    lines.append(f"  • {e.get('name', 'Unnamed')}  [{e.get('type', 'unknown')}]  id:{e.get('elementId', '')[:8]}...")
+                return "\n".join(lines)
+
+        # Get features for a Part Studio
+        if "feature" in t or "extrude" in t or "fillet" in t or "hole" in t or "sketch" in t or "plane" in t:
+            # Specific feature parameter query takes precedence over list
+            # e.g., "what's the diameter of Hole 1" or "depth of Extrude 1"
+            param_keywords = ("diameter", "radius", "depth", "dimension", "parameter", "value")
+            if any(k in t for k in param_keywords):
+                # Try to find feature by name in message
+                import re
+                feature_name_match = re.search(r'["\']([^"\']+)["\']', user_message)
+                if not feature_name_match:
+                    feature_name_match = re.search(r'\b(Hole|Fillet|Extrude|Sketch|Plane|Hole|Chamfer)\s+\d+', user_message, re.IGNORECASE)
+                feature_name = feature_name_match.group(0) if feature_name_match else None
+
+                if feature_name:
+                    feat_result = get_features(did, wid, eid)
+                    if feat_result.get("ok"):
+                        features = feat_result["data"]
+                        for f in features:
+                            if feature_name.lower() in f.get("name", "").lower():
+                                param_result = get_feature_params(did, wid, eid, f["featureId"])
+                                if param_result.get("ok"):
+                                    from tools.onshape_tools import format_feature_params
+                                    return f"{f['name']} parameters:\n{format_feature_params(param_result['data']['parameters'])}"
+                                break
+                        else:
+                            return f"Feature '{feature_name}' not found in Part Studio."
+                else:
+                    return "Please specify which feature (e.g., 'Hole 1', 'Fillet 1')."
+
+            # List all features
+            if "list" in t or "show" in t or "what" in t or "all" in t:
+                result = get_features(did, wid, eid)
+                if not result.get("ok"):
+                    return f"Failed to get features: {result.get('error')}"
+                from tools.onshape_tools import format_feature_list
+                return f"Features in Part Studio:\n{format_feature_list(result['data'])}"
+
+        # Part Studio info (parts, bodies)
+        if "part" in t and ("list" in t or "show" in t or "what" in t):
+            result = get_part_studio_info(did, wid, eid)
+            if not result.get("ok"):
+                return f"Failed to get Part Studio info: {result.get('error')}"
+            from tools.onshape_tools import format_part_studio_info
+            return format_part_studio_info(result["data"])
+
+    # If we have document ID but no workspace/element, get document info
+    if did and not (wid and eid):
+        if "document" in t or "workspace" in t:
+            result = get_document(did)
+            if not result.get("ok"):
+                return f"Failed to get document: {result.get('error')}"
+            doc = result["data"]
+            workspaces = doc.get("workspaces", [])
+            lines = [f"Document: {doc.get('name', 'Unnamed')}"]
+            lines.append(f"  Default workspace: {doc.get('defaultWorkspace', {}).get('name', 'N/A')}")
+            if workspaces:
+                lines.append("Workspaces:")
+                for w in workspaces[:5]:
+                    lines.append(f"  • {w.get('name')}  (id: {w.get('id')[:8]}...)")
+            return "\n".join(lines)
+
+    # Fallback: generic help
+    if did and wid and eid:
+        return (
+            f"Found Part Studio (did={did[:8]}, wid={wid[:8]}, eid={eid[:8]}). "
+            "Try: 'list features', 'what's the diameter of Hole 1', 'list parts', 'show elements'"
+        )
+    elif did:
+        return (
+            f"Found document (did={did[:8]}). "
+            "Try: 'list elements', 'show workspaces', or paste a full Part Studio URL."
+        )
+    else:
+        return (
+            "I can help with Onshape! Try:\n"
+            "  • 'list my onshape documents'\n"
+            "  • Paste a document URL: https://cad.onshape.com/documents/.../w/.../e/...\n"
+            "  • Then: 'list features', 'what's the diameter of Hole 1', 'list parts'"
+        )
+
+
 def ask_with_tools(user_message: str) -> str:
     global _last_provider_used, _last_model_used, _nemotron_usage_count
 
+    ask_start = time.time()
+
     # ── Hybrid routing: local MLX first (simple chat, works offline) ──
+    intent_start = time.time()
     intent = classify_intent(user_message)
+    log_decision(
+        phase="understand",
+        decision="intent_classified",
+        decision_source="classify_intent",
+        measurable_inputs={"intent": intent},
+        latency_ms=int((time.time() - intent_start) * 1000),
+    )
     _debug(f"[Router] Intent: {intent}")
     local_reply = _try_local_routing(user_message, intent=intent)
     if local_reply is not None:
+        log_decision(
+            phase="act",
+            decision="local_routing_used",
+            decision_source="_try_local_routing",
+            measurable_inputs={"intent": intent},
+            outcome="success",
+            latency_ms=int((time.time() - ask_start) * 1000),
+        )
         return local_reply
 
+    # ── CAD / Onshape intent (read-only Phase 1) ──
+    if intent == "cad":
+        log_decision(
+            phase="act",
+            decision="cad_handler",
+            decision_source="intent_equals_cad",
+            measurable_inputs={"intent": intent},
+        )
+        return _handle_cad_request(user_message)
+
     if not _internet_available():
+        log_decision(
+            phase="act",
+            decision="no_internet",
+            decision_source="_internet_available",
+            outcome="failure",
+        )
         return "No internet connection. Cloud AI providers require internet access."
 
     # ── Daily cost budget guardrail (JARVIS_DAILY_BUDGET_USD; 0 = unlimited) ──
     _budget_hit, _spent, _limit = _daily_budget_exceeded()
     if _budget_hit:
+        log_decision(
+            phase="act",
+            decision="budget_exhausted",
+            decision_source="_daily_budget_exceeded",
+            measurable_inputs={"spent": _spent, "limit": _limit},
+            outcome="failure",
+        )
         try:
             from local_provider import is_available, ask_local
 
@@ -3111,17 +3500,52 @@ def ask_with_tools(user_message: str) -> str:
             _debug(f"[Cache] Read intent={intent}, checking semantic cache...")
             cached = semantic_cache_get(user_message, intent)
             if cached is not None:
+                log_decision(
+                    phase="act",
+                    decision="cache_hit",
+                    decision_source="semantic_cache_get",
+                    measurable_inputs={"intent": intent},
+                    outcome="success",
+                    latency_ms=int((time.time() - ask_start) * 1000),
+                )
                 _debug(f"[Cache] HIT for intent={intent}, returning cached response")
                 return cached
         except Exception:
             pass
     else:
+        log_decision(
+            phase="understand",
+            decision="cache_bypass",
+            decision_source="intent_not_chat",
+            measurable_inputs={"intent": intent},
+        )
         _debug(f"[Router] Semantic cache bypass for intent={intent}")
 
     # ── Primary: Nemotron Ultra (tool-first + final) ──
+    _nemotron_attempted = False
     if JARVIS_LLM_FIRST:
-        chosen = _select_primary_provider(user_message)
+        provider_select_start = time.time()
+        # LLM provider selection only matters for coding (DeepSeek vs Nemotron).
+        # Non-coding requests use Nemotron Ultra directly — no LLM round-trip.
+        if intent == "coding" and DEEPSEEK_API_KEY:
+            chosen = _select_primary_provider(user_message)
+        else:
+            chosen = "nemotron_ultra"
+        log_decision(
+            phase="act",
+            decision="llm_provider_selected",
+            decision_source="_select_primary_provider",
+            measurable_inputs={"chosen": chosen},
+            latency_ms=int((time.time() - provider_select_start) * 1000),
+        )
         if chosen == "nemotron_ultra" and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
+            log_decision(
+                phase="act",
+                decision="provider_selected",
+                decision_source="llm_first_nemotron",
+                measurable_inputs={"provider": "Nemotron Ultra", "model": NEMOTRON_ULTRA_MODEL},
+            )
+            _nemotron_attempted = True
             try:
                 _debug("[Router] Nemotron Ultra primary (selected by LLM)")
                 _last_provider_used = "nemotron_ultra"
@@ -3138,6 +3562,12 @@ def ask_with_tools(user_message: str) -> str:
                 _debug(f"Nemotron Ultra primary failed (LLM-selected): {e}")
                 _handle_provider_failure("Nemotron Ultra", e)
         elif chosen == "deepseek" and DEEPSEEK_API_KEY and _provider_available("DeepSeek"):
+            log_decision(
+                phase="act",
+                decision="provider_selected",
+                decision_source="llm_first_deepseek",
+                measurable_inputs={"provider": "DeepSeek", "model": DEEPSEEK_MODEL},
+            )
             try:
                 _debug("[Router] DeepSeek primary (selected by LLM)")
                 _last_provider_used = "deepseek"
@@ -3149,7 +3579,13 @@ def ask_with_tools(user_message: str) -> str:
                 _debug(f"DeepSeek primary failed (LLM-selected): {e}")
                 _handle_provider_failure("DeepSeek", e)
     # Fallback to original provider logic
-    if NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
+    if not _nemotron_attempted and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
+        log_decision(
+            phase="act",
+            decision="provider_selected",
+            decision_source="fallback_nemotron",
+            measurable_inputs={"provider": "Nemotron Ultra", "model": NEMOTRON_ULTRA_MODEL},
+        )
         try:
             _debug("[Router] Nemotron Ultra primary")
             _last_provider_used = "nemotron_ultra"
@@ -3167,6 +3603,12 @@ def ask_with_tools(user_message: str) -> str:
             _handle_provider_failure("Nemotron Ultra", e)
 
     # ── Plugin providers (after Nemotron, before built-in fallback) ──
+    log_decision(
+        phase="act",
+        decision="plugin_providers_attempted",
+        decision_source="plugin_manager",
+        measurable_inputs={},
+    )
     try:
         from plugin_manager import get_plugin_providers
 
@@ -3175,18 +3617,37 @@ def ask_with_tools(user_message: str) -> str:
             if not _provider_available(pname):
                 continue
             try:
+                log_decision(
+                    phase="act",
+                    decision="plugin_provider_attempted",
+                    decision_source="plugin_manager",
+                    measurable_inputs={"provider": pname},
+                )
                 _debug(f"[Router] Trying plugin provider: {pname}")
                 reply = _retry(lambda: pp["handler"](user_message, []), max_retries=2)
                 _last_provider_used = pname.lower().replace(" ", "_")
                 _record_provider_success(pname)
                 return reply
             except Exception as e:
+                log_decision(
+                    phase="act",
+                    decision="plugin_provider_failed",
+                    decision_source="plugin_manager",
+                    measurable_inputs={"provider": pname, "error": str(e)},
+                    outcome="failure",
+                )
                 _debug(f"Plugin provider {pname} failed: {e}")
                 _handle_provider_failure(pname, e)
     except Exception:
         pass
 
     # ── Capture tool results from primary provider (Nemotron) for fallback context ──
+    log_decision(
+        phase="act",
+        decision="context_preparation",
+        decision_source="_prefetch_tools_for_message",
+        measurable_inputs={"accumulated_count": len(_turn_memo_cache)},
+    )
     _accumulated_tool_results = []
     _TOOL_RESULT_LIMIT = 2000
     for key, val in _turn_memo_cache.items():
@@ -3211,6 +3672,17 @@ def ask_with_tools(user_message: str) -> str:
             break
     combined_results = truncated
     if combined_results:
+        log_decision(
+            phase="act",
+            decision="fallback_context_prepared",
+            decision_source="combined_results",
+            measurable_inputs={
+                "total_count": len(combined_results),
+                "accumulated_count": len(_accumulated_tool_results),
+                "prefetched_count": len(prefetched),
+                "char_count": char_count,
+            },
+        )
         _debug(f"Passing {len(combined_results)} tool results to fallbacks ({len(_accumulated_tool_results)} from primary + {len(prefetched)} prefetched, truncated to ~{char_count // 4}t)")
     else:
         _debug("No accumulated tool results from primary provider")
@@ -3236,21 +3708,63 @@ def ask_with_tools(user_message: str) -> str:
     available = [(n, a, f, _provider_health_scores.get(n, 100)) for n, a, f in raw_providers if a]
     available.sort(key=lambda x: x[3], reverse=True)
 
+    log_decision(
+        phase="act",
+        decision="fallback_chain_prepared",
+        decision_source="health_sorted_providers",
+        measurable_inputs={"providers": [(n, h) for n, _, _, h in available]},
+    )
+
     _failed_providers = []
     for provider_name, _is_available, fn, health in available:
         if not _provider_available(provider_name):
+            log_decision(
+                phase="act",
+                decision="provider_skipped",
+                decision_source="_provider_available",
+                measurable_inputs={"provider": provider_name, "reason": "backoff/disabled"},
+                outcome="skipped",
+            )
             _debug(f"Skipping {provider_name} (backoff/disabled)")
             continue
         if health < 30:
+            log_decision(
+                phase="act",
+                decision="provider_skipped",
+                decision_source="health_threshold",
+                measurable_inputs={"provider": provider_name, "health": health},
+                outcome="skipped",
+            )
             _debug(f"Skipping {provider_name} (low health: {health})")
             continue
+        log_decision(
+            phase="act",
+            decision="fallback_provider_attempted",
+            decision_source="health_sorted_fallback",
+            measurable_inputs={"provider": provider_name, "health": health},
+        )
         _debug(f"Using {provider_name} fallback (health={health})...")
         try:
             reply = _retry(fn, max_retries=2)
             _last_provider_used = provider_name.lower().replace(" ", "_")
             _record_provider_success(provider_name)
+            log_decision(
+                phase="act",
+                decision="fallback_provider_succeeded",
+                decision_source=provider_name,
+                measurable_inputs={"provider": provider_name},
+                outcome="success",
+                latency_ms=0,
+            )
             return reply
         except Exception as e:
+            log_decision(
+                phase="act",
+                decision="fallback_provider_failed",
+                decision_source=provider_name,
+                measurable_inputs={"provider": provider_name, "error": str(e)},
+                outcome="failure",
+            )
             _debug(f"{provider_name} fallback failed: {e}")
             _handle_provider_failure(provider_name, e)
             _failed_providers.append(f"{provider_name}: {e}")
@@ -3258,17 +3772,51 @@ def ask_with_tools(user_message: str) -> str:
     # ── Last resort: on-device NN provider (never raises, works fully offline) ──
     if not JARVIS_MOCK_PROVIDERS:
         try:
+            log_decision(
+                phase="act",
+                decision="local_nn_attempted",
+                decision_source="_local_intent_predict",
+                measurable_inputs={},
+            )
             _local_offline_intent, _local_offline_conf = _local_intent_predict(user_message)
             reply = ask_local_offline(user_message, combined_results)
             _last_provider_used = "local_nn"
+            log_decision(
+                phase="act",
+                decision="local_nn_succeeded",
+                decision_source="ask_local_offline",
+                measurable_inputs={"intent": _local_offline_intent, "confidence": _local_offline_conf},
+                outcome="success",
+            )
             _debug(f"[Local NN] Offline reply (intent={_local_offline_intent}, conf={_local_offline_conf:.2f})")
             return reply
         except Exception as e:
+            log_decision(
+                phase="act",
+                decision="local_nn_failed",
+                decision_source="ask_local_offline",
+                measurable_inputs={"error": str(e)},
+                outcome="failure",
+            )
             _debug(f"[Local NN] Offline provider failed: {e}")
 
     if _failed_providers:
+        log_decision(
+            phase="act",
+            decision="all_providers_failed",
+            decision_source="fallback_chain_exhausted",
+            measurable_inputs={"failed_providers": _failed_providers, "count": len(_failed_providers)},
+            outcome="failure",
+        )
         details = "; ".join(_failed_providers)
         return f"All configured AI providers are currently unavailable. Provider errors: {details}. Please try again shortly."
+    log_decision(
+        phase="act",
+        decision="all_providers_unavailable",
+        decision_source="no_available_providers",
+        measurable_inputs={},
+        outcome="failure",
+    )
     return "All configured AI providers are currently unavailable. Please try again shortly."
 
 
@@ -3495,12 +4043,19 @@ def process(text):
     global _turn_memo_cache, _current_request_id
     _turn_memo_cache = {}
     _tool_call_names.clear()
-    _current_request_id = generate_request_id()
+    _current_request_id = new_request_id()
     _start_time = time.time()
     # Clear intent cache for new turn
     conversation_context.intent_cache.clear()
     text = _sanitize_user_message(text)
     t = text.lower()
+
+    log_decision(
+        phase="understand",
+        decision="process_start",
+        decision_source="process",
+        measurable_inputs={"user_message_len": len(text)},
+    )
 
     # Imperative command routing: for "open X" / "launch X" / "start X", help model pick right tool
     imperative_verbs = ("open ", "launch ", "start ", "run ", "quit ", "close ", "kill ")
@@ -3754,7 +4309,12 @@ def process(text):
             _found_verbs.add(word)
     _has_conjunction = re.search(r"\band\b|\bthen\b|\balso\b", t)
     if len(_found_verbs) >= 2 and _has_conjunction:
-        _debug(f"[Router] Compound request detected ({_found_verbs}) — routing to planner")
+        log_decision(
+            phase="plan",
+            decision="route_to_planner",
+            decision_source="compound_request_detector",
+            measurable_inputs={"verbs": list(_found_verbs), "has_conjunction": True},
+        )
         try:
             from tts import speak as _speak_status
 
@@ -3770,6 +4330,12 @@ def process(text):
             _debug(f"Planner loop for compound request failed: {e}, falling through")
 
     if needs_planner(text):
+        log_decision(
+            phase="plan",
+            decision="route_to_planner",
+            decision_source="needs_planner_heuristic",
+            measurable_inputs={"text_preview": text[:100]},
+        )
         try:
             from tts import speak as _speak_status
 
@@ -3798,6 +4364,12 @@ def process(text):
                 _debug(f"Agent loop failed: {e2}, falling back")
                 reply = ask_with_tools(text)
     elif needs_agent_loop(text):
+        log_decision(
+            phase="plan",
+            decision="route_to_agent",
+            decision_source="needs_agent_loop_heuristic",
+            measurable_inputs={"text_preview": text[:100]},
+        )
         try:
             from tts import speak as _speak_status
 
@@ -3814,6 +4386,12 @@ def process(text):
             _debug(f"Agent loop failed: {e}, falling back")
             reply = ask_with_tools(text)
     else:
+        log_decision(
+            phase="plan",
+            decision="route_to_direct",
+            decision_source="no_planner_agent_trigger",
+            measurable_inputs={},
+        )
         reply = ask_with_tools(text)
 
     conversation.append({"role": "user", "content": text})
@@ -3915,6 +4493,22 @@ def process(text):
     except Exception:
         pass
 
+    log_decision(
+        phase="respond",
+        decision="final_response",
+        decision_source="process",
+        measurable_inputs={
+            "provider": _last_provider_used,
+            "model": _last_model_used,
+            "tools_used": _tool_calls_log,
+            "intent": _intent,
+            "response_len": len(reply),
+            "latency_seconds": round(time.time() - _start_time, 3),
+        },
+        outcome="success",
+        latency_ms=int((time.time() - _start_time) * 1000),
+    )
+    
     return reply
 
 

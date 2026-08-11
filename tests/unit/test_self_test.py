@@ -102,12 +102,15 @@ def test_detect_empty_reply_for_tool_intent():
 
 
 def test_load_entries_time_window(tmp_path):
+    from datetime import datetime, timedelta
+
     from self_test import oracle
 
     p = tmp_path / "jarvis.jsonl"
     with open(p, "w") as f:
         f.write(json.dumps({"ts": "2020-01-01T00:00:00", "intent": "chat"}) + "\n")
-        f.write(json.dumps({"ts": "2026-08-09T10:00:00", "intent": "tool_use"}) + "\n")
+        recent = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        f.write(json.dumps({"ts": recent, "intent": "tool_use"}) + "\n")
     entries = oracle.load_entries(hours=24, path=str(p))
     assert len(entries) == 1
     assert entries[0]["intent"] == "tool_use"

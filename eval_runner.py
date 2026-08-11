@@ -53,6 +53,7 @@ def score_intent_accuracy(actual_intent: str, expected_intent: str) -> float:
 
 def run_eval_case(case: dict, require_no_api: bool = False) -> dict:
     from brain import classify_intent, process
+    from decision_log import get_request_id
 
     prompt = case.get("prompt", "")
     requires_api = case.get("requires_api", False)
@@ -110,6 +111,7 @@ def run_eval_case(case: dict, require_no_api: bool = False) -> dict:
         "latency_ok": latency_ok,
         "passed": passed,
         "reply_preview": (reply or "")[:200],
+        "request_id": get_request_id(),
     }
 
 

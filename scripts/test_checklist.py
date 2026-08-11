@@ -37,7 +37,7 @@ def check(name: str, ok: bool, detail: str = ""):
 
 def api_get(path: str) -> dict:
     try:
-        resp = urllib.request.urlopen(f"http://localhost:8000{path}", timeout=10)
+        resp = urllib.request.urlopen(f"http://localhost:8002{path}", timeout=10)
         return json.loads(resp.read())
     except Exception as e:
         return {"_error": str(e)}
@@ -45,10 +45,12 @@ def api_get(path: str) -> dict:
 
 def start_server():
     global _server_proc
-    _server_proc = subprocess.Popen([sys.executable, "server.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    env = os.environ.copy()
+    env["JARVIS_PORT"] = "8002"
+    _server_proc = subprocess.Popen([sys.executable, "server.py"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for i in range(20):
         try:
-            resp = urllib.request.urlopen("http://localhost:8000/health", timeout=3)
+            resp = urllib.request.urlopen("http://localhost:8002/health", timeout=3)
             if resp.status == 200:
                 return
         except Exception:

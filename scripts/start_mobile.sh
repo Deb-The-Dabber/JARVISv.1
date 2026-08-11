@@ -13,9 +13,11 @@ if command -v tailscale >/dev/null 2>&1; then
   TS_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
   if [[ -n "$TS_IP" ]]; then
     echo "Tailscale IP: $TS_IP"
-    echo "Phone URL:    http://${TS_IP}:8000"
+    echo "Phone URL:    http://${TS_IP}:${JARVIS_PORT:-8002}"
   fi
 fi
+
+export JARVIS_PORT=8002
 
 echo "Starting server (Ctrl+C to stop)..."
 if command -v caffeinate >/dev/null 2>&1; then

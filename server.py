@@ -114,6 +114,31 @@ async def health_providers():
     return get_provider_health()
 
 
+@app.get("/health/providers")
+async def health_providers():
+    from brain import get_provider_health
+
+    return get_provider_health()
+
+
+@app.get("/debug/decisions")
+async def debug_decisions(request_id: str = None, limit: int = 100):
+    """Return decision traces for a request or recent requests."""
+    from decision_log import load_recent_decisions
+
+    events = load_recent_decisions(limit=limit, request_id=request_id)
+    return {"events": events}
+
+
+@app.get("/debug/decisions/{request_id}")
+async def debug_decision_trace(request_id: str):
+    """Full trace for a single request, ordered by timestamp."""
+    from decision_log import get_decision_trace
+
+    trace = get_decision_trace(request_id)
+    return {"request_id": request_id, "trace": trace}
+
+
 @app.post("/ask", response_model=TextResponse)
 async def ask_text(req: TextRequest, tts: str = "server"):
     if not req.text.strip():
@@ -1863,4 +1888,4 @@ if __name__ == "__main__":
 
     print("\n  Full guide: MOBILE.md")
     print("  TTS plays on this Mac's speakers.\n")
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False, workers=1)

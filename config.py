@@ -202,3 +202,13 @@ GOOGLE_FORMS_SCOPES = [
     "https://www.googleapis.com/auth/forms.responses.readonly",
     "https://www.googleapis.com/auth/drive.file",
 ]
+
+# Email IMAP settings (.env: EMAIL_IMAP_HOST / EMAIL_IMAP_PORT / EMAIL_IMAP_SSL / EMAIL_USERNAME / EMAIL_PASSWORD)
+EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "imap.gmail.com")
+EMAIL_IMAP_PORT = int(os.getenv("EMAIL_IMAP_PORT", "993"))
+EMAIL_IMAP_SSL = os.getenv("EMAIL_IMAP_SSL", "true").lower() == "true"
+EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")  # App password for Gmail/Outlook
+EMAIL_DEFAULT_FOLDER = os.getenv("EMAIL_DEFAULT_FOLDER", "INBOX")
+EMAIL_MAX_RESULTS = int(os.getenv("EMAIL_MAX_RESULTS", "20"))
+EMAIL_FETCH_BODY = os.getenv("EMAIL_FETCH_BODY", "true").lower() == "true"
