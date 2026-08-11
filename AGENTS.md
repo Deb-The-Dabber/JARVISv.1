@@ -48,7 +48,7 @@ Testing stack: `pytest` + `ruff`. Config in `pyproject.toml` at root.
 - `GOOGLE_GENAI_API_KEY` — Gemini (primary, tool calling)
 - `NVIDIA_API_KEY` — vision/screen analysis
 - `NVIDIA_NEMOTRON_API_KEY` — Nemotron & NIM models
-- `DEEPSEEK_API_KEY` — DeepSeek v4 (via NVIDIA NIM, NVIDIA key format)
+- `DEEPSEEK_API_KEY` — vestigial since Phase 2A (dedicated DeepSeek route removed); kept for `.env` compatibility, no longer read by `brain.py`
 - `GROQ_API_KEY`, `OPENROUTER_API_KEY` — fallback providers
 - `ELEVENLABS_API_KEY` — TTS (free tier → Edge-TTS → macOS `say`; quota warning prints once/session)
 - `EDGE_TTS_VOICE` — Microsoft Edge TTS voice (default: `en-US-JennyNeural`)
@@ -64,6 +64,8 @@ Constants in `config.py` (user info, paths, TTLs, models).
 | `terminal.py` | CLI: voice/text → brain → TTS, wake word loop, proactive engine |
 | `server.py` | FastAPI :8000: `/ask`, `/ask-voice`, `/health`, `/system`, `/weather`, `/recap`, `/memories`, `/priorities`, `/audit`, `/brain/reset`, `/oauth/*`, `/learner/*`, `/inspect` |
 | `brain.py` | Provider chain, tool calling, safety gating, tool definitions, intent router, circuit breaker, `_tool_call_names` tracking, `get_last_tool_calls()` |
+| `routing_policy.py` | Optional policy-driven provider selection (Phase 2A): capability/latency/cost/health scoring, hard gates, classifier-output parsing. Wired via `JARVIS_ROUTER_POLICY` / `JARVIS_ROUTER_CHEAP` |
+| `benchmarks/` | Coding-routing benchmark harness (`coding_routing_bench.py`, `compare_bench.py`, `tests/eval/routing_golden.jsonl`, `results/`) |
 | `jarvis_local_nn/` | From-scratch NumPy tiny tensor library + **two-stage intent router**. Stage 1: coarse 6-way router (MiniLM 384-dim → MLP 384→128→6), weights in `weights/intent_router.npz`. Stage 2: one specialist MLP per bucket (same arch → N fine classes, 89 total) in `weights/specialists/<bucket>.npz`, taxonomy in `taxonomy.yaml` (fine classes, tool→intent map, `execution_primitives` excluded from the classifier). Retrain coarse: `python -m jarvis_local_nn.training.train`; specialists: `python -m jarvis_local_nn.training.train_specialist --all`. Eval: `python -m jarvis_local_nn.training.evaluate` (golden set, scores coarse + fine via `expected_fine`). Calibrate: `python -m jarvis_local_nn.training.calibrate` (coarse per-intent gates) and `python -m jarvis_local_nn.training.calibrate_fine --all` (writes `weights/specialists/thresholds.json` per-class gates). Auto-retrain: `jarvis_local_nn/training/auto_retrain.py` — debounced (default 600s) background retrain triggered from `brain._on_tool_learned` when the learner adds a new tool (`JARVIS_AUTO_RETRAIN_ENABLED=0` off, `JARVIS_AUTO_RETRAIN_INTERVAL` window). Toggles: `JARVIS_LOCAL_INTENT_ENABLED=0` (router; independent of the MLX local-chat `JARVIS_LOCAL_ENABLED`); coarse gates: global `JARVIS_LOCAL_INTENT_CONFIDENCE=0.85` + per-intent `JARVIS_LOCAL_INTENT_CONFIDENCE_{CHAT,CODING,TOOL_USE,REASONING,SELF_MOD,AUTOMATION}`; fine gates: `weights/specialists/thresholds.json` + per-class `JARVIS_FINE_CONFIDENCE_<CLASS>` overrides (bucket defaults 0.85/0.90). Embeddings cached in `~/.jarvis/nn_cache/embeddings.npz` (keyed by text hash; incremental retrains embed only new entries). First call per process loads MiniLM (~8s), then 10-70ms/call; reuses vector_memory's embedder. Also acts as last-resort offline provider in `ask_with_tools` (`local_nn` canned reply + locally prefetched tool results). Runtime: `brain.classify_intent` fast-path → coarse bucket → `predict_fine_gated` (per-class gate; below gate the fine label is withheld and routing falls to the LLM) → exposed via `brain.get_last_fine_intent()`, consumed by `_FINE_PREFETCH` (weather_current/sys_info/disk_usage → safe no-arg tool prefetch) |
 | `tools/` | 13+ modules: system, browser, spotify, discord, calendar, file, code, computer, vision, communication, **google_docs**, **google_slides**, **google_forms**, **inspect_tools** |
 | `learner.py` | LLM code-gen learning: `trigger_learning()`, CRUD for learned tools, web API endpoints |
@@ -120,20 +122,24 @@ Constants in `config.py` (user info, paths, TTLs, models).
 ## Provider Chain (auto-failover)
 
 ```
-User → Intent Router → Nemotron Ultra (primary) / DeepSeek (coding) → Fallbacks
+User → Intent Router → Nemotron Ultra (primary) → Fallbacks
 ```
 
 | Tier | Provider | Role |
 |------|----------|------|
 | 1 | **Nemotron 3 Ultra** | Primary — tool-first + final response (tool calling + reasoning) |
-| 2 | **DeepSeek v4** | Coding only — routed by intent classifier when code/script/bug keywords detected |
-| 3 | **Gemini 2.5 Flash** | Fallback — excellent tool calling, used when Nemotron unavailable |
-| 4 | **Groq llama-3.3-70b** | Fallback — full tools support via modern `tool_choice` format |
-| 5 | **NVIDIA NIM Tier 5** | Llama 4 Maverick → MiniMax M2.7 (split blast radius) |
-| 6 | **NVIDIA NIM Tier 6** | Qwen 3.5 (397B MoE) → Mistral Large 3 (split blast radius) |
-| 7 | **DeepSeek v4** | Fallback — via NVIDIA NIM |
-| 8 | **OpenRouter deepseek-r1** | Last-resort fallback |
-| 9 | **Pollinations.ai** | No-key emergency fallback |
+| 2 | **Gemini 2.5 Flash** | Fallback — excellent tool calling, used when Nemotron unavailable |
+| 3 | **Groq llama-3.3-70b** | Fallback — full tools support via modern `tool_choice` format |
+| 4 | **NVIDIA NIM Tier 5** | Llama 4 Maverick → MiniMax M2.7 (split blast radius) |
+| 5 | **NVIDIA NIM Tier 6** | Qwen 3.5 (397B MoE) → Mistral Large 3 (split blast radius) |
+| 6 | **OpenRouter deepseek-r1** | Last-resort fallback |
+| 7 | **Pollinations.ai** | No-key emergency fallback |
+
+### Phase 2A routing policy (optional, default off)
+
+- `JARVIS_ROUTER_POLICY=1` — policy-driven provider selection (`routing_policy.py`): scores candidates by capability fit / observed latency / cost / health; hard-gates unavailable or unhealthy (health < 30) providers; fallback chain ordered by score when the primary fails.
+- `JARVIS_ROUTER_CHEAP=1` — fast Groq classify before Nemotron when the user message isn't tool-y, avoiding the expensive Nemotron classify round-trip. Overrides fine-intent labels from the cheap path.
+- Dedicated DeepSeek v4 primary/coding route and NIM DeepSeek tier removed in Phase 2A (bench-verified: intent 19.5s→7.5s avg, routing 86.5s→9.2s avg, stall errors 12→0, intent accuracy -0.09 with cheap classifier on — see `benchmarks/`).
 
 ## Gotchas
 

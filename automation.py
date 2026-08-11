@@ -508,12 +508,12 @@ class AutomationEngine:
         session.current_step = "Analyzing code task and planning implementation"
         session.steps_completed.append("Started coding task execution")
 
-        # Route to DeepSeek for coding tasks
+        # Route to the primary coding provider (brain's routing logic)
         # This will be handled by the brain's routing logic
         session.state = AutomationState.COMPLETED
-        session.current_step = f"Code task '{session.code_task[:50]}...' routed to DeepSeek for implementation"
+        session.current_step = f"Code task '{session.code_task[:50]}...' routed to the primary provider (Nemotron/NIM chain) for implementation"
         self._save_sessions()
-        return f"🔧 Coding task sent to DeepSeek: {session.code_task}\n\nI'll implement this in {session.project_folder} using {session.ide}. Check the IDE for progress."
+        return f"🔧 Coding task routed to the primary provider: {session.code_task}\n\nI'll implement this in {session.project_folder} using {session.ide}. Check the IDE for progress."
 
     def _classify_task(self, description: str) -> TaskType:
         """Classify the task type from description."""

@@ -57,6 +57,12 @@ HUGGINGFACE_TOKEN = _env("HUGGINGFACE_TOKEN")
 MOCK_PROVIDER_URL = os.getenv("MOCK_PROVIDER_URL", "http://localhost:8888").rstrip("/")
 JARVIS_MOCK_PROVIDERS = os.getenv("JARVIS_MOCK_PROVIDERS", "0") == "1"
 JARVIS_LLM_FIRST = os.getenv("JARVIS_LLM_FIRST", "1") == "1"
+# Phase 2A routing policy: deterministic capability/health/latency/cost
+# provider selection. Default OFF during dev — flip only after BEFORE/AFTER
+# benchmark shows it winning. JARVIS_ROUTER_CHEAP gates the cheap intent
+# classifier (Groq) used when the local NN is not confident.
+JARVIS_ROUTER_POLICY = os.getenv("JARVIS_ROUTER_POLICY", "0") == "1"
+JARVIS_ROUTER_CHEAP = os.getenv("JARVIS_ROUTER_CHEAP", "0") == "1"
 JARVIS_LOCAL_ENABLED = os.getenv("JARVIS_LOCAL_ENABLED", "1") == "1"
 JARVIS_EVAL_MODE = os.getenv("JARVIS_EVAL_MODE", "0") == "1"
 JARVIS_LOCAL_INTENT_ENABLED = os.getenv("JARVIS_LOCAL_INTENT_ENABLED", "1") == "1"
@@ -113,9 +119,6 @@ GEMINI_TOOL_MODEL = "gemini-2.5-flash"
 GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"]
 NIM_MODEL_TIER5 = ["meta/llama-4-maverick-17b-128e-instruct", "minimaxai/minimax-m2.7"]
 NIM_MODEL_TIER6 = ["qwen/qwen3.5-397b-a17b", "mistralai/mistral-large-3-675b-instruct-2512"]
-DEEPSEEK_API_KEY = _env("DEEPSEEK_API_KEY")
-# DeepSeek v4 Flash is EOL (2026-08-07). Commented out fallback.
-DEEPSEEK_MODEL = "deepseek-ai/deepseek-v4-flash"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 # OpenRouter free tier: use a known working free model
 OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
@@ -152,21 +155,159 @@ def _llm_choose(prompt: str, valid_options: set[str] | None = None, max_retries:
         _debug(f"[LLM‑choose] error: {e}")
         return None
 
-def _select_primary_provider(user_message: str) -> str | None:
-    """LLM‑first selector between Nemotron Ultra and DeepSeek for coding tasks.
-    Returns ``"nemotron_ultra"`` or ``"deepseek"`` (lower‑case) or ``None``.
+def _select_primary_provider(user_message: str, intent: str) -> str | None:
+    """Deterministic primary selection (Phase 2A).
+
+    Policy-on (JARVIS_ROUTER_POLICY=1): top eligible candidate per
+    routing_policy scoring (capability fit x health x latency x cost).
+    Policy-off: coding -> ``"nemotron_ultra"`` (DeepSeek v4 Flash is EOL —
+    no LLM round-trip for arbitration). Returns a profile key or None.
     """
     if not JARVIS_LLM_FIRST:
         return None
-    opts = {"nemotron_ultra", "deepseek"}
-    prompt = (
-        "Given the following user request, decide which primary language model should handle it. "
-        "Options are: 'nemotron_ultra' for NVIDIA Nemotron Ultra, or 'deepseek' for DeepSeek. "
-        "Respond with only the selected option name.\n\n"
-        f"User request: {user_message}\n"
-    )
-    choice = _llm_choose(prompt, valid_options=opts)
-    return choice
+    if JARVIS_ROUTER_POLICY:
+        try:
+            ordered = _policy_candidate_order(intent)
+            top = ordered[0] if ordered else None
+            if top and top.get("status") == "eligible":
+                return top["provider"]
+            _debug("[Router] policy found no eligible primary")
+            return None
+        except Exception as e:
+            _debug(f"[Router] policy selection failed, defaulting: {e}")
+    return "nemotron_ultra" if intent == "coding" else None
+
+
+# ── Phase 2A routing policy wiring (routing_policy.py holds the pure logic) ──
+# Profile key -> (display name, availability check, ask fn, model label).
+_POLICY_PRIMARY_CALLS: dict[str, tuple[str, object, object, str]] = {
+    "nemotron_ultra": (
+        "Nemotron Ultra",
+        lambda: bool(NVIDIA_NEMOTRON_API_KEY),
+        lambda u: ask_nemotron_ultra(u, [], timeout=90),
+        NEMOTRON_ULTRA_MODEL,
+    ),
+    "gemini": (
+        "Gemini",
+        lambda: _gemini_available(),
+        lambda u: ask_gemini(u),
+        GEMINI_TOOL_MODEL,
+    ),
+    "groq": (
+        "Groq",
+        lambda: bool(GROQ_API_KEY),
+        lambda u: ask_groq(u, []),
+        GROQ_MODEL,
+    ),
+    "nvidia_nim_tier_5": (
+        "NVIDIA NIM Tier 5",
+        lambda: bool(NVIDIA_NEMOTRON_API_KEY),
+        lambda u: ask_nim_tier5(u, []),
+        NIM_MODEL_TIER5[0],
+    ),
+    "nvidia_nim_tier_6": (
+        "NVIDIA NIM Tier 6",
+        lambda: bool(NVIDIA_NEMOTRON_API_KEY),
+        lambda u: ask_nim_tier6(u, []),
+        NIM_MODEL_TIER6[0],
+    ),
+    "openrouter": (
+        "OpenRouter",
+        lambda: bool(OPENROUTER_API_KEY),
+        lambda u: ask_openrouter(u, []),
+        OPENROUTER_MODEL,
+    ),
+    "pollinations": (
+        "Pollinations",
+        lambda: True,
+        lambda u: ask_pollinations(u, []),
+        POLLINATIONS_MODEL,
+    ),
+}
+
+_PROVIDER_KEY_BY_DISPLAY = {
+    display: key for key, (display, _, _, _) in _POLICY_PRIMARY_CALLS.items()
+}
+
+
+def _observed_latency_ms(display_name: str) -> float | None:
+    """Rolling avg latency (ms) from provider health, when observed."""
+    try:
+        h = get_provider_health().get(display_name, {})
+        avg = h.get("avg_latency")
+        return round(avg * 1000, 1) if avg else None
+    except Exception:
+        return None
+
+
+def _policy_candidate_order(intent: str) -> list[dict]:
+    """Score live providers for an intent via routing_policy (deterministic).
+
+    Hard eligibility (unavailable / health < 30 -> INVALID) happens inside
+    score_candidates; the result is decision-logged for telemetry (2A.4).
+    """
+    from routing_policy import PROVIDER_PROFILES, score_candidates
+
+    health_view = get_provider_health()
+    cands = []
+    for key, (display, available_fn, _fn, _model) in _POLICY_PRIMARY_CALLS.items():
+        profile = PROVIDER_PROFILES.get(key, {})
+        h = health_view.get(display, {})
+        health = h.get("health_score", 100)
+        latency_ms = _observed_latency_ms(display)
+        if latency_ms is None and profile.get("base_latency_ms"):
+            latency_ms = profile["base_latency_ms"]
+        try:
+            avail = bool(available_fn()) and not _backoff_active(display)
+        except Exception:
+            avail = False
+        cands.append(
+            {"provider": key, "health": health, "latency_ms": latency_ms, "available": avail}
+        )
+    try:
+        exceeded, spent, budget = _daily_budget_exceeded()
+        budget_warning = bool(budget and budget > 0 and not exceeded and spent / budget > 0.75)
+    except Exception:
+        budget_warning = False
+    ordered = score_candidates(intent, cands, budget_warning=budget_warning)
+    _log_policy_decision(intent, ordered)
+    return ordered
+
+
+def _backoff_active(display_name: str) -> bool:
+    """Backoff/circuit gate only — health threshold is scored by the policy.
+    Returns True when the provider is currently cooling down (skip it)."""
+    if display_name not in _provider_backoff_until:
+        return False
+    return _provider_backoff_until[display_name] > time.time()
+
+
+def _log_policy_decision(intent: str, ordered: list[dict]) -> None:
+    """2A.4: explainable routing telemetry — every candidate + components."""
+    try:
+        log_decision(
+            phase="plan",
+            decision="routing_policy_ordered",
+            decision_source="routing_policy.score_candidates",
+            measurable_inputs={
+                "intent": intent,
+                "policy_on": JARVIS_ROUTER_POLICY,
+                "candidates": [
+                    {
+                        "provider": e["provider"],
+                        "score": e.get("score"),
+                        "status": e["status"],
+                        "reason": e.get("reason"),
+                        **e.get("components", {}),
+                        "observed": e.get("observed", {}),
+                    }
+                    for e in ordered
+                ],
+            },
+        )
+    except Exception as e:
+        _debug(f"[Router] telemetry log failed: {e}")
+
 
 _local_override: str | None = None  # "local" | "cloud" | None (auto)
 
@@ -690,34 +831,53 @@ def classify_intent(text: str) -> str:
             return _local_intent
 
     # LLM‑first classification for remaining cases (≈90% of cases)
-    if JARVIS_LLM_FIRST and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra") and not JARVIS_MOCK_PROVIDERS:
-        try:
-            llm_prompt = (
-                "Classify the following user request into one of these categories: "
-                "coding, tool_use, reasoning, self_mod, chat. Respond with only the category name.\n\n"
-                f"User request: {text}\n"
-            )
-            # Use the low‑level Nemotron Ultra call to avoid routing loops
-            classification = (
-                _retry(lambda: ask_nemotron_ultra(llm_prompt, [], timeout=45), max_retries=2).strip().lower()
-            )
+    if JARVIS_LLM_FIRST and not JARVIS_MOCK_PROVIDERS:
+        if JARVIS_ROUTER_CHEAP and GROQ_API_KEY:
+            # 2A.2: cheap Groq classifier — replaces the Nemotron classify
+            # round-trip. It can only emit intent fields (never a provider).
+            try:
+                parsed = _cheap_classify(text)
+                classification = parsed["intent"] if parsed else None
+            except Exception as e:
+                _debug(f"[Intent] cheap classifier error: {e}")
+                classification = None
             if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
-                _debug(f"[Intent] LLM classification gave '{classification}'")
-                # If LLM says 'chat' but text matches reasoning patterns, defer to keyword fallback
-                reasoning_patterns = (
-                    "why does", "why is", "why are", "why would", "why did", "why do",
-                    "how do", "how does", "how can i", "how would", "how is it",
-                    "explain", "analyze", "design a", "design an", "strategy",
-                    "compare", "evaluate", "pros and cons", "think about",
-                    "what is the", "describe", "tell me about",
+                _debug(f"[Intent] cheap classifier gave '{classification}' (fine={parsed.get('fine_intent')})")
+                try:
+                    if parsed.get("fine_intent"):
+                        _last_fine_intent, _last_fine_confidence = parsed["fine_intent"], 0.6
+                except Exception:
+                    pass
+                conversation_context.intent_cache[text] = classification
+                return classification
+        if NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
+            try:
+                llm_prompt = (
+                    "Classify the following user request into one of these categories: "
+                    "coding, tool_use, reasoning, self_mod, chat. Respond with only the category name.\n\n"
+                    f"User request: {text}\n"
                 )
-                if classification == "chat" and any(k in t for k in reasoning_patterns):
-                    _debug("[Intent] LLM said 'chat' but reasoning pattern matched — deferring to keyword fallback")
-                else:
-                    conversation_context.intent_cache[text] = classification
-                    return classification
-        except Exception as e:
-            _debug(f"[Intent] LLM classification error: {e}")
+                # Use the low‑level Nemotron Ultra call to avoid routing loops
+                classification = (
+                    _retry(lambda: ask_nemotron_ultra(llm_prompt, [], timeout=45), max_retries=2).strip().lower()
+                )
+                if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
+                    _debug(f"[Intent] LLM classification gave '{classification}'")
+                    # If LLM says 'chat' but text matches reasoning patterns, defer to keyword fallback
+                    reasoning_patterns = (
+                        "why does", "why is", "why are", "why would", "why did", "why do",
+                        "how do", "how does", "how can i", "how would", "how is it",
+                        "explain", "analyze", "design a", "design an", "strategy",
+                        "compare", "evaluate", "pros and cons", "think about",
+                        "what is the", "describe", "tell me about",
+                    )
+                    if classification == "chat" and any(k in t for k in reasoning_patterns):
+                        _debug("[Intent] LLM said 'chat' but reasoning pattern matched — deferring to keyword fallback")
+                    else:
+                        conversation_context.intent_cache[text] = classification
+                        return classification
+            except Exception as e:
+                _debug(f"[Intent] LLM classification error: {e}")
 
     # CAD / Onshape — early detection before keyword fallback
     import re
@@ -1155,13 +1315,12 @@ def get_runtime_status() -> dict:
         "model_preferred": NEMOTRON_ULTRA_MODEL,
         "model_fallback": GROQ_MODEL,
         "model_last_used": _last_model_used,
-        "api_key_configured": any([NVIDIA_NEMOTRON_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY]),
+        "api_key_configured": any([NVIDIA_NEMOTRON_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY]),
         "nemotron_usage": _nemotron_usage_count,
         "gemini_usage": _get_gemini_usage_count(),
         "providers": {
             "nemotron_ultra": bool(NVIDIA_NEMOTRON_API_KEY),
             "gemini": bool(GEMINI_API_KEY),
-            "deepseek": bool(DEEPSEEK_API_KEY),
             "groq": bool(GROQ_API_KEY),
             "openrouter": bool(OPENROUTER_API_KEY),
             "pollinations": True,
@@ -1174,7 +1333,6 @@ def get_runtime_status() -> dict:
 def check_providers() -> dict:
     providers = {
         "nemotron_ultra": bool(NVIDIA_NEMOTRON_API_KEY),
-        "deepseek": bool(DEEPSEEK_API_KEY),
         "gemini": bool(GEMINI_API_KEY),
         "groq": bool(GROQ_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
@@ -1184,11 +1342,10 @@ def check_providers() -> dict:
     }
     labels = {
         "nemotron_ultra": "NVIDIA Nemotron Ultra (primary, tool-first + final)",
-        "deepseek": "DeepSeek v4 Flash (coding only)",
         "gemini": "Gemini 2.5 Flash (fallback, tool calling)",
         "groq": "Groq llama-3.3-70b (fallback)",
         "openrouter": "OpenRouter deepseek-r1 (fallback)",
-        "nvidia_nim": "NVIDIA Nemotron Nano (fallback)",
+        "nvidia_nim": "NVIDIA NIM (fallback tiers)",
         "pollinations": "Pollinations.ai (no-key emergency)",
         "huggingface": "HuggingFace (embeddings/downloads)",
     }
@@ -3044,16 +3201,37 @@ def ask_nim_tier6(user_message: str, tool_results: list[str]) -> str:
     return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_TIER6, provider_name="NVIDIA NIM Tier 6")
 
 
-def ask_deepseek(user_message: str, tool_results: list[str]) -> str:
-    return _ask_openai_compatible(
-        "DeepSeek Flash",
-        DEEPSEEK_API_KEY,
-        "https://integrate.api.nvidia.com/v1",
-        DEEPSEEK_MODEL,
-        user_message,
-        tool_results,
-        functions=_build_openai_functions(),
+def _cheap_classify(user_message: str) -> dict | None:
+    """2A.2 cheap intent classifier (Groq, JSON completion).
+
+    Contract (routing_policy.CLASSIFIER_KEYS): may only return intent fields
+    — it can NEVER select a provider. Falls back to the legacy path on any
+    error by raising, so callers degrade gracefully.
+    """
+    from openai import OpenAI
+    from routing_policy import parse_classifier_output
+
+    client = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
+    system = (
+        "You classify user requests into exactly one of: coding, tool_use, "
+        "reasoning, self_mod, chat. Respond ONLY with a JSON object like "
+        '{"intent": "coding", "fine_intent": "debug_code", "complexity": 2, '
+        '"tool_required": false}. The intent must be one of the five values. '
+        'No other keys or text. "fine_intent" is optional.'
     )
+    resp = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": (user_message or "")[:1200]},
+        ],
+        temperature=0,
+        max_tokens=140,
+        timeout=30,
+        response_format={"type": "json_object"},
+    )
+    content = (resp.choices[0].message.content or "") if resp.choices else ""
+    return parse_classifier_output(content)
 
 
 def ask_groq(user_message: str, tool_results: list[str]) -> str:
@@ -3521,33 +3699,31 @@ def ask_with_tools(user_message: str) -> str:
         )
         _debug(f"[Router] Semantic cache bypass for intent={intent}")
 
-    # ── Primary: Nemotron Ultra (tool-first + final) ──
+    # ── Primary: deterministic (policy or Nemotron-default) tool-first + final ──
     _nemotron_attempted = False
     if JARVIS_LLM_FIRST:
         provider_select_start = time.time()
-        # LLM provider selection only matters for coding (DeepSeek vs Nemotron).
-        # Non-coding requests use Nemotron Ultra directly — no LLM round-trip.
-        if intent == "coding" and DEEPSEEK_API_KEY:
-            chosen = _select_primary_provider(user_message)
-        else:
-            chosen = "nemotron_ultra"
+        chosen = _select_primary_provider(user_message, intent)
+        chosen = "nemotron_ultra" if chosen is None else chosen
         log_decision(
             phase="act",
-            decision="llm_provider_selected",
-            decision_source="_select_primary_provider",
-            measurable_inputs={"chosen": chosen},
+            decision="provider_selected",
+            decision_source=(
+                "routing_policy" if JARVIS_ROUTER_POLICY else "deterministic_default"
+            ),
+            measurable_inputs={"provider": chosen, "intent": intent, "policy_on": JARVIS_ROUTER_POLICY},
             latency_ms=int((time.time() - provider_select_start) * 1000),
         )
         if chosen == "nemotron_ultra" and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
             log_decision(
                 phase="act",
                 decision="provider_selected",
-                decision_source="llm_first_nemotron",
+                decision_source="nemotron_primary",
                 measurable_inputs={"provider": "Nemotron Ultra", "model": NEMOTRON_ULTRA_MODEL},
             )
             _nemotron_attempted = True
             try:
-                _debug("[Router] Nemotron Ultra primary (selected by LLM)")
+                _debug("[Router] Nemotron Ultra primary")
                 _last_provider_used = "nemotron_ultra"
                 _last_model_used = NEMOTRON_ULTRA_MODEL
                 _nemotron_usage_count += 1
@@ -3559,25 +3735,31 @@ def ask_with_tools(user_message: str) -> str:
                 _record_provider_success("Nemotron Ultra")
                 return reply
             except Exception as e:
-                _debug(f"Nemotron Ultra primary failed (LLM-selected): {e}")
+                _debug(f"Nemotron Ultra primary failed: {e}")
                 _handle_provider_failure("Nemotron Ultra", e)
-        elif chosen == "deepseek" and DEEPSEEK_API_KEY and _provider_available("DeepSeek"):
-            log_decision(
-                phase="act",
-                decision="provider_selected",
-                decision_source="llm_first_deepseek",
-                measurable_inputs={"provider": "DeepSeek", "model": DEEPSEEK_MODEL},
-            )
-            try:
-                _debug("[Router] DeepSeek primary (selected by LLM)")
-                _last_provider_used = "deepseek"
-                _last_model_used = DEEPSEEK_MODEL
-                reply = _retry(lambda: ask_deepseek(user_message, []), max_retries=2)
-                _record_provider_success("DeepSeek")
-                return reply
-            except Exception as e:
-                _debug(f"DeepSeek primary failed (LLM-selected): {e}")
-                _handle_provider_failure("DeepSeek", e)
+        elif JARVIS_ROUTER_POLICY and chosen in _POLICY_PRIMARY_CALLS:
+            display, available_fn, ask_fn, model = _POLICY_PRIMARY_CALLS[chosen]
+            if available_fn() and _provider_available(display):
+                log_decision(
+                    phase="act",
+                    decision="provider_selected",
+                    decision_source="routing_policy_primary",
+                    measurable_inputs={"provider": display, "model": model},
+                )
+                try:
+                    _debug(f"[Router] Policy primary: {display} (chosen={chosen})")
+                    _last_provider_used = chosen
+                    _last_model_used = model
+                    reply = _retry(ask_fn, max_retries=2)
+                    if has_pending_safe():
+                        with _pending_lock:
+                            pending_tool = _pending_safe.get("tool", "that")
+                        return f"I need your permission to {pending_tool.replace('_', ' ')}. Shall I go ahead?"
+                    _record_provider_success(display)
+                    return reply
+                except Exception as e:
+                    _debug(f"{display} policy-primary failed: {e}")
+                    _handle_provider_failure(display, e)
     # Fallback to original provider logic
     if not _nemotron_attempted and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
         log_decision(
@@ -3704,14 +3886,35 @@ def ask_with_tools(user_message: str) -> str:
         ("Pollinations", True, lambda: ask_pollinations(user_message, combined_results)),
     ]
 
-    # Filter available, then sort by health descending
+    # Filter available, then sort: policy ordering (2A.3) or health descending
     available = [(n, a, f, _provider_health_scores.get(n, 100)) for n, a, f in raw_providers if a]
-    available.sort(key=lambda x: x[3], reverse=True)
+    if JARVIS_ROUTER_POLICY:
+        try:
+            from routing_policy import score_candidates
+
+            policy_cands = [
+                {
+                    "provider": _PROVIDER_KEY_BY_DISPLAY.get(n, n),
+                    "health": h,
+                    "latency_ms": _observed_latency_ms(n),
+                    "available": True,
+                }
+                for n, _a, _f, h in available
+            ]
+            ordered = score_candidates(intent, policy_cands)
+            rank = {e["provider"]: i for i, e in enumerate(ordered)}
+            available.sort(key=lambda x: rank.get(_PROVIDER_KEY_BY_DISPLAY.get(x[0], x[0]), 999))
+            _log_policy_decision(intent, ordered)
+        except Exception as e:
+            _debug(f"[Router] policy fallback ordering failed, health sort: {e}")
+            available.sort(key=lambda x: x[3], reverse=True)
+    else:
+        available.sort(key=lambda x: x[3], reverse=True)
 
     log_decision(
         phase="act",
         decision="fallback_chain_prepared",
-        decision_source="health_sorted_providers",
+        decision_source="routing_policy" if JARVIS_ROUTER_POLICY else "health_sorted_providers",
         measurable_inputs={"providers": [(n, h) for n, _, _, h in available]},
     )
 
@@ -3975,7 +4178,7 @@ def _summarize_with_gemini(history: str) -> str:
 def _summarize_paste(content: str, max_chars: int = 2000) -> str:
     """Summarize pasted content for context preservation.
 
-    Uses local LLM (Nemotron/DeepSeek) if available, falls back to extractive summary.
+    Uses local LLM (Nemotron/NIM) if available, falls back to extractive summary.
     Returns a brief summary that captures the essence of the pasted content.
     """
     if not content or len(content) <= max_chars:
