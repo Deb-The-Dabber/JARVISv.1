@@ -24,8 +24,8 @@ def reset_safety():
 def test_tool_permission_levels():
     assert TOOL_PERMISSIONS.get("get_weather") == SAFE
     assert TOOL_PERMISSIONS.get("get_weather_detailed") == SAFE
-    assert TOOL_PERMISSIONS.get("browser_navigate") == SAFE
-    assert TOOL_PERMISSIONS.get("browser_current_url") == SAFE
+    assert TOOL_PERMISSIONS.get("browser_navigate") == WARNING
+    assert TOOL_PERMISSIONS.get("browser_current_url") == WARNING
     assert TOOL_PERMISSIONS.get("click_on_screen") == WARNING
     assert TOOL_PERMISSIONS.get("send_imessage") == DANGEROUS
     assert TOOL_PERMISSIONS.get("run_terminal_command") == DANGEROUS

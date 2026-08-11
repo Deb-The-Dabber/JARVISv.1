@@ -8,6 +8,10 @@ import time
 import pytest
 import requests
 
+# Standalone script (run: python tests/test_session_permission.py), not a pytest
+# module — its `test_result` helper is mis-collected as a test otherwise.
+collect_ignore = ["test_session_permission.py"]
+
 # Freeze brain's import-time env before ANY test module imports it. Without
 # this, the first file to import brain (collection order is randomized by
 # pytest-randomly) decides whether the local NN intent fast-path is enabled,
@@ -272,6 +276,11 @@ def mock_api(mock_provider_server):
     else:
         _stop_proc(proc)
         raise RuntimeError("Server failed to start within 60s")
+    if proc.poll() is not None:
+        _stop_proc(proc)
+        raise RuntimeError(
+            "Server process exited during startup — check for a port 8002 conflict"
+        )
 
     session = requests.Session()
 
