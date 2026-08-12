@@ -124,7 +124,7 @@ BUDGET_WARNING_HEADROOM = 0.25
 _COST_PENALTY_FACTOR = 0.7
 
 # Cheap-classifier output contract: it MUST never contain a provider name.
-CLASSIFIER_KEYS = ("intent", "fine_intent", "complexity", "tool_required")
+CLASSIFIER_KEYS = ("intent", "fine_intent", "complexity", "tool_required", "confidence")
 
 
 def capability_fit(intent: str, profile: dict[str, Any]) -> float:
@@ -290,6 +290,11 @@ def parse_classifier_output(text: str) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         result["complexity"] = 3
     result["tool_required"] = bool(data.get("tool_required"))
+    try:
+        conf = data.get("confidence")
+        result["confidence"] = float(conf) if conf is not None else None
+    except (TypeError, ValueError):
+        result["confidence"] = None
     return result
 
 

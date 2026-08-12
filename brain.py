@@ -67,6 +67,7 @@ JARVIS_LOCAL_ENABLED = os.getenv("JARVIS_LOCAL_ENABLED", "1") == "1"
 JARVIS_EVAL_MODE = os.getenv("JARVIS_EVAL_MODE", "0") == "1"
 JARVIS_LOCAL_INTENT_ENABLED = os.getenv("JARVIS_LOCAL_INTENT_ENABLED", "1") == "1"
 JARVIS_LOCAL_INTENT_CONFIDENCE = float(os.getenv("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85"))
+JARVIS_LOCAL_AGREEMENT_GATE = os.getenv("JARVIS_LOCAL_AGREEMENT_GATE", "0") == "1"
 JARVIS_DAILY_BUDGET_USD = float(os.getenv("JARVIS_DAILY_BUDGET_USD", "0"))
 
 _LOCAL_INTENT_THRESHOLDS = {
@@ -861,11 +862,18 @@ def classify_intent(text: str) -> str:
             _fine, _fine_conf = _local_fine_predict(text, _local_intent)
             if _fine is not None:
                 _debug(f"[Intent] fine: '{_fine}' ({_fine_conf:.2f})")
-            _log_classifier_path(
-                "local_nn", _local_intent, confidence=_local_conf,
-                raw={"fine": _fine, "fine_conf": _fine_conf},
-            )
-            return _local_intent
+            agreement_suspicious = JARVIS_LOCAL_AGREEMENT_GATE and _fine is None
+            if agreement_suspicious:
+                _debug(
+                    f"[Intent] agreement gate: coarse '{_local_intent}' ({_local_conf:.2f}) "
+                    "but specialist withheld — escalating to LLM classify"
+                )
+            else:
+                _log_classifier_path(
+                    "local_nn", _local_intent, confidence=_local_conf,
+                    raw={"fine": _fine, "fine_conf": _fine_conf},
+                )
+                return _local_intent
 
     # LLM‑first classification for remaining cases (≈90% of cases)
     if JARVIS_LLM_FIRST and not JARVIS_MOCK_PROVIDERS:
@@ -880,14 +888,23 @@ def classify_intent(text: str) -> str:
                 classification = None
             if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
                 _debug(f"[Intent] cheap classifier gave '{classification}' (fine={parsed.get('fine_intent')})")
-                _log_classifier_path("cheap_groq", classification, confidence=parsed.get("confidence"), raw=parsed)
-                try:
-                    if parsed.get("fine_intent"):
-                        _last_fine_intent, _last_fine_confidence = parsed["fine_intent"], 0.6
-                except Exception:
-                    pass
-                conversation_context.intent_cache[text] = classification
-                return classification
+                escalation = classification == "tool_use" and parsed.get("tool_required") is False
+                if not escalation and JARVIS_LOCAL_AGREEMENT_GATE and not parsed.get("fine_intent"):
+                    _debug("[Intent] agreement gate: cheap intent without fine intent — escalating to LLM classify")
+                    escalation = True
+                if escalation:
+                    _debug("[Intent] cheap said tool_use but tool_required=false — escalating to LLM classify")
+                else:
+                    try:
+                        if parsed.get("fine_intent"):
+                            _last_fine_intent, _last_fine_confidence = parsed["fine_intent"], 0.6
+                    except Exception:
+                        pass
+                    _log_classifier_path(
+                        "cheap_groq", classification, confidence=parsed.get("confidence"), raw=parsed
+                    )
+                    conversation_context.intent_cache[text] = classification
+                    return classification
         if NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
             try:
                 llm_prompt = (
@@ -3261,11 +3278,76 @@ def _cheap_classify(user_message: str) -> dict | None:
 
     client = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
     system = (
-        "You classify user requests into exactly one of: coding, tool_use, "
-        "reasoning, self_mod, chat. Respond ONLY with a JSON object like "
-        '{"intent": "coding", "fine_intent": "debug_code", "complexity": 2, '
-        '"tool_required": false}. The intent must be one of the five values. '
-        'No other keys or text. "fine_intent" is optional.'
+        "You classify user requests into exactly one of five intents. Each request gets "
+        "exactly ONE intent, plus an optional fine-grained intent and a confidence score.\n\n"
+        "INTENT DEFINITIONS:\n"
+        "- coding: the user wants CODE WORK - writing, fixing, refactoring, reviewing, "
+        "porting, optimizing, debugging, or documenting scripts/functions/projects. "
+        "Includes 'write a script that...', 'write a function...', 'add feature X to a CLI "
+        "tool', 'design the endpoints/API for...', 'review this function', 'refactor this', "
+        "'port X to Y', 'translate this script'. The words script, function, endpoint, API, "
+        "code, CLI, class, README, bug are strong coding signals.\n"
+        "- tool_use: the user wants Jarvis to DO something on the machine or web: open/quit "
+        "apps, search the web, weather, timers, spotify, calendar, files/folders, "
+        "screen/computer actions, terminal commands, iMessage, discord. 'Open', 'search "
+        "for', 'play', 'set a timer', 'what's my CPU', 'click', 'navigate', 'upload a file "
+        "to X' are tool signals.\n"
+        "- reasoning: conceptual explanation or analysis of HOW/WHY something works, general "
+        "knowledge ('why does the sky look blue', 'explain the GIL', 'compare X and Y', "
+        "'pros and cons', 'what is the difference between'). NOT code tasks: 'explain a "
+        "context manager' is reasoning, but 'fix my context manager' is coding.\n"
+        "- self_mod: the user asks Jarvis to change Jarvis's own code or source files "
+        "(brain.py, terminal.py, server.py, tools/, config.py) - 'fix brain.py', 'modify "
+        "yourself', 'improve your code'.\n"
+        "- chat: everything else - casual conversation, memory ('remember that'), questions "
+        "about Jarvis itself, greetings.\n\n"
+        "RULES:\n"
+        "- A request to WRITE or FIX CODE is always coding, never tool_use, even when the "
+        "code does something (watching a directory, uploading files, parsing CSV).\n"
+        "- 'Design the endpoints/API/schema for X' is coding (implement_feature or "
+        "design_api), never reasoning and never tool_use.\n"
+        "- 'Review/Refactor/Optimize/Port' followed by code context is coding.\n"
+        "- tool_required: true if fulfilling the request needs a tool (web search, file "
+        "ops, app control, running code). 'Write me a function' is false; 'find files in "
+        "~/Downloads' is true.\n"
+        "- confidence: your confidence in the intent choice, 0.0-1.0.\n\n"
+        "EXAMPLES:\n"
+        "User: 'Write a Python function that computes the Levenshtein distance'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"write_code\", \"complexity\": 2, "
+        "\"tool_required\": false, \"confidence\": 0.98}\n"
+        "User: 'Write a script that finds duplicate files by content hash in a given directory'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"write_script\", \"complexity\": 2, "
+        "\"tool_required\": false, \"confidence\": 0.95}\n"
+        "User: 'Design the endpoints for a file upload service with resumable uploads'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"design_api\", \"complexity\": 3, "
+        "\"tool_required\": false, \"confidence\": 0.93}\n"
+        "User: 'Add progress bar support to a CLI tool using tqdm'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"implement_feature\", "
+        "\"complexity\": 2, \"tool_required\": false, \"confidence\": 0.9}\n"
+        "User: 'Review this function for bugs and edge cases: it slices a list without any bounds checks'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"review_code\", \"complexity\": 2, "
+        "\"tool_required\": false, \"confidence\": 0.92}\n"
+        "User: 'Open safari and search for weather in Tokyo'\n"
+        " -> {\"intent\": \"tool_use\", \"fine_intent\": \"browser\", \"complexity\": 1, "
+        "\"tool_required\": true, \"confidence\": 0.99}\n"
+        "User: 'Set a timer called tea for 10 seconds'\n"
+        " -> {\"intent\": \"tool_use\", \"fine_intent\": \"timer\", \"complexity\": 1, "
+        "\"tool_required\": true, \"confidence\": 0.99}\n"
+        "User: 'Why does Python's GIL affect threading performance'\n"
+        " -> {\"intent\": \"reasoning\", \"fine_intent\": \"explain_concept\", "
+        "\"complexity\": 2, \"tool_required\": false, \"confidence\": 0.97}\n"
+        "User: 'Explain what a context manager is and why with open works'\n"
+        " -> {\"intent\": \"reasoning\", \"fine_intent\": \"explain_concept\", "
+        "\"complexity\": 1, \"tool_required\": false, \"confidence\": 0.95}\n"
+        "User: 'Fix brain.py, the wake word handler crashes'\n"
+        " -> {\"intent\": \"self_mod\", \"fine_intent\": \"modify_self\", \"complexity\": 3, "
+        "\"tool_required\": false, \"confidence\": 0.97}\n"
+        "User: 'hello how are you today'\n"
+        " -> {\"intent\": \"chat\", \"fine_intent\": \"conversation\", \"complexity\": 0, "
+        "\"tool_required\": false, \"confidence\": 0.99}\n\n"
+        "Respond ONLY with a JSON object with keys: intent (one of the five), fine_intent "
+        "(optional string), complexity (0-4), tool_required (bool), confidence (0-1). "
+        "No other keys or text."
     )
     resp = client.chat.completions.create(
         model=GROQ_MODEL,

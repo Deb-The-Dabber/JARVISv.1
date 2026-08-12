@@ -1,0 +1,552 @@
+{
+  "per_case": [
+    {
+      "prompt": "My Python script crashes with 'IndexError: list index out of range' when parsing a CSV that has empty rows. Can you help me fix the parsing loop?",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.4227,
+      "fine": null,
+      "fine_conf": 0.2911,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "debug_code"
+    },
+    {
+      "prompt": "Why does this async function hang forever? asyncio.gather gives no results and the event loop never exits cleanly.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.3395,
+      "fine": null,
+      "fine_conf": 0.0828,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "debug_code"
+    },
+    {
+      "prompt": "My regex r'<a.*?>' on HTML grabs everything from the first opening tag to the last closing tag. What is the correct lazy quantifier to make it stop at the first match per line?",
+      "expected": "coding",
+      "coarse": "chat",
+      "coarse_conf": 0.9009,
+      "fine": null,
+      "fine_conf": 0.1531,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "debug_code"
+    },
+    {
+      "prompt": "A Flask endpoint returns 500 with 'Object of type Decimal is not JSON serializable'. How do I fix the serialization?",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.5379,
+      "fine": null,
+      "fine_conf": 0.1259,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "debug_code"
+    },
+    {
+      "prompt": "This while loop pegs the CPU at 100% even when the list is nearly empty. Is the exit condition wrong, and how should I rewrite it?",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.5335,
+      "fine": "process_list",
+      "fine_conf": 0.4748,
+      "fine_withheld_by_gate": false,
+      "golden_fine": "debug_code"
+    },
+    {
+      "prompt": "git merge reports CONFLICT on files I never touched. Can you explain what happened and the cleanest way to resolve it?",
+      "expected": "coding",
+      "coarse": "chat",
+      "coarse_conf": 0.5516,
+      "fine": null,
+      "fine_conf": 0.1331,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "debug_code"
+    },
+    {
+      "prompt": "Write a Python function that computes the Levenshtein distance between two strings using a DP table.",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.8361,
+      "fine": null,
+      "fine_conf": 0.1385,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "write_code"
+    },
+    {
+      "prompt": "Write a Python snippet that flattens a nested list of arbitrary depth.",
+      "expected": "coding",
+      "coarse": "chat",
+      "coarse_conf": 0.3202,
+      "fine": null,
+      "fine_conf": 0.1765,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "write_code"
+    },
+    {
+      "prompt": "Write a script that finds duplicate files by content hash in a given directory.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.7944,
+      "fine": "file_list",
+      "fine_conf": 0.4063,
+      "fine_withheld_by_gate": false,
+      "golden_fine": "write_script"
+    },
+    {
+      "prompt": "Write a Python class implementing a simple LRU cache that is thread-safe.",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.5172,
+      "fine": null,
+      "fine_conf": 0.1186,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "write_code"
+    },
+    {
+      "prompt": "Implement retry-with-backoff logic for a network call: retry 3 times with exponential backoff plus jitter.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.8641,
+      "fine": null,
+      "fine_conf": 0.1036,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "implement_feature"
+    },
+    {
+      "prompt": "Add progress bar support to a CLI tool using tqdm: show percent, ETA, and transfer rate.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.3677,
+      "fine": null,
+      "fine_conf": 0.1175,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "implement_feature"
+    },
+    {
+      "prompt": "Write a bash one-liner to rename all .JPG files to lowercase .jpg in the current folder.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.3397,
+      "fine": null,
+      "fine_conf": 0.184,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "write_script"
+    },
+    {
+      "prompt": "Write a Python script that watches a directory and logs newly created files.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.8751,
+      "fine": null,
+      "fine_conf": 0.2547,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "write_script"
+    },
+    {
+      "prompt": "Write a Python script to convert a JSON file with nested objects into a flattened CSV with dotted keys.",
+      "expected": "coding",
+      "coarse": "chat",
+      "coarse_conf": 0.4012,
+      "fine": null,
+      "fine_conf": 0.1327,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "write_script"
+    },
+    {
+      "prompt": "Explain what this Python snippet does and give a full example: sorted(items, key=lambda x: x[1]).",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.5354,
+      "fine": null,
+      "fine_conf": 0.1611,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "explain_code"
+    },
+    {
+      "prompt": "Walk me through how Python's GIL affects threading performance for CPU-bound vs IO-bound code.",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.5142,
+      "fine": null,
+      "fine_conf": 0.125,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "explain_code"
+    },
+    {
+      "prompt": "Explain what a context manager is and why 'with open(...)' is preferred over manual close().",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.9017,
+      "fine": null,
+      "fine_conf": 0.4212,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "explain_code"
+    },
+    {
+      "prompt": "Refactor this function to avoid O(n^2) behavior: it builds a list with '+=' inside a loop.",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.527,
+      "fine": null,
+      "fine_conf": 0.1595,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "improve_code"
+    },
+    {
+      "prompt": "How can I make this nested if-else chain more readable? Propose a dict-dispatch refactor.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.653,
+      "fine": null,
+      "fine_conf": 0.1185,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "improve_code"
+    },
+    {
+      "prompt": "Optimize code that reads a large JSON file line by line but builds a giant in-memory dict \u2014 suggest streaming or preprocessing.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.9112,
+      "fine": null,
+      "fine_conf": 0.2054,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "improve_code"
+    },
+    {
+      "prompt": "Review this function for bugs and edge cases: it slices a list without any bounds checks.",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.8581,
+      "fine": null,
+      "fine_conf": 0.14,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "review_code"
+    },
+    {
+      "prompt": "Port this JavaScript arrow-function map/filter chain to idiomatic Python.",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.7157,
+      "fine": null,
+      "fine_conf": 0.1809,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "convert_lang"
+    },
+    {
+      "prompt": "Translate this Python script to a TypeScript equivalent using async/await.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.5759,
+      "fine": null,
+      "fine_conf": 0.1445,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "convert_lang"
+    },
+    {
+      "prompt": "Design a REST API for a URL shortener: list the endpoints, status codes, and request/response shapes.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.3926,
+      "fine": null,
+      "fine_conf": 0.2652,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "design_api"
+    },
+    {
+      "prompt": "Design the endpoints for a file upload service with resumable uploads.",
+      "expected": "coding",
+      "coarse": "tool_use",
+      "coarse_conf": 0.696,
+      "fine": null,
+      "fine_conf": 0.2308,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "design_api"
+    },
+    {
+      "prompt": "Write a README section that explains installation and quickstart for a CLI tool.",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.7153,
+      "fine": null,
+      "fine_conf": 0.1759,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "generate_docs"
+    },
+    {
+      "prompt": "Give me a .gitignore for a Python project with a venv, __pycache__, and .env files.",
+      "expected": "coding",
+      "coarse": "coding",
+      "coarse_conf": 0.6757,
+      "fine": null,
+      "fine_conf": 0.161,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "write_config"
+    },
+    {
+      "prompt": "I need to choose between microservices and a monolith for a small team's new product. Compare the tradeoffs and give a recommendation.",
+      "expected": "reasoning",
+      "coarse": "reasoning",
+      "coarse_conf": 0.3256,
+      "fine": null,
+      "fine_conf": 0.2648,
+      "fine_withheld_by_gate": true,
+      "golden_fine": "design_strategy"
+    },
+    {
+      "prompt": "Hi! What can you help me with today? Give me a quick summary of your abilities.",
+      "expected": "chat",
+      "coarse": "chat",
+      "coarse_conf": 0.9711,
+      "fine": "ask_capabilities",
+      "fine_conf": 0.3342,
+      "fine_withheld_by_gate": false,
+      "golden_fine": "ask_capabilities"
+    }
+  ],
+  "sweep": {
+    "chat": {
+      "0.5": {
+        "accepted": 3,
+        "correct": 1,
+        "incorrect": 2,
+        "escalated": 2
+      },
+      "0.6": {
+        "accepted": 2,
+        "correct": 1,
+        "incorrect": 1,
+        "escalated": 3
+      },
+      "0.7": {
+        "accepted": 2,
+        "correct": 1,
+        "incorrect": 1,
+        "escalated": 3
+      },
+      "0.8": {
+        "accepted": 2,
+        "correct": 1,
+        "incorrect": 1,
+        "escalated": 3
+      },
+      "0.85": {
+        "accepted": 2,
+        "correct": 1,
+        "incorrect": 1,
+        "escalated": 3
+      },
+      "0.9": {
+        "accepted": 2,
+        "correct": 1,
+        "incorrect": 1,
+        "escalated": 3
+      },
+      "0.92": {
+        "accepted": 1,
+        "correct": 1,
+        "incorrect": 0,
+        "escalated": 4
+      },
+      "0.95": {
+        "accepted": 1,
+        "correct": 1,
+        "incorrect": 0,
+        "escalated": 4
+      },
+      "0.97": {
+        "accepted": 1,
+        "correct": 1,
+        "incorrect": 0,
+        "escalated": 4
+      }
+    },
+    "coding": {
+      "0.5": {
+        "accepted": 10,
+        "correct": 10,
+        "incorrect": 0,
+        "escalated": 0
+      },
+      "0.6": {
+        "accepted": 5,
+        "correct": 5,
+        "incorrect": 0,
+        "escalated": 5
+      },
+      "0.7": {
+        "accepted": 4,
+        "correct": 4,
+        "incorrect": 0,
+        "escalated": 6
+      },
+      "0.8": {
+        "accepted": 2,
+        "correct": 2,
+        "incorrect": 0,
+        "escalated": 8
+      },
+      "0.85": {
+        "accepted": 1,
+        "correct": 1,
+        "incorrect": 0,
+        "escalated": 9
+      },
+      "0.9": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 10
+      },
+      "0.92": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 10
+      },
+      "0.95": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 10
+      },
+      "0.97": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 10
+      }
+    },
+    "tool_use": {
+      "0.5": {
+        "accepted": 9,
+        "correct": 0,
+        "incorrect": 9,
+        "escalated": 5
+      },
+      "0.6": {
+        "accepted": 7,
+        "correct": 0,
+        "incorrect": 7,
+        "escalated": 7
+      },
+      "0.7": {
+        "accepted": 5,
+        "correct": 0,
+        "incorrect": 5,
+        "escalated": 9
+      },
+      "0.8": {
+        "accepted": 4,
+        "correct": 0,
+        "incorrect": 4,
+        "escalated": 10
+      },
+      "0.85": {
+        "accepted": 4,
+        "correct": 0,
+        "incorrect": 4,
+        "escalated": 10
+      },
+      "0.9": {
+        "accepted": 2,
+        "correct": 0,
+        "incorrect": 2,
+        "escalated": 12
+      },
+      "0.92": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 14
+      },
+      "0.95": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 14
+      },
+      "0.97": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 14
+      }
+    },
+    "reasoning": {
+      "0.5": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      },
+      "0.6": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      },
+      "0.7": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      },
+      "0.8": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      },
+      "0.85": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      },
+      "0.9": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      },
+      "0.92": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      },
+      "0.95": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      },
+      "0.97": {
+        "accepted": 0,
+        "correct": 0,
+        "incorrect": 0,
+        "escalated": 1
+      }
+    }
+  },
+  "best_per_intent": {
+    "chat": {
+      "threshold": 0.92,
+      "score": 1.0,
+      "n": 5
+    },
+    "coding": {
+      "threshold": 0.5,
+      "score": 10.0,
+      "n": 10
+    },
+    "tool_use": {
+      "threshold": 0.92,
+      "score": 0.0,
+      "n": 14
+    },
+    "reasoning": {
+      "threshold": 0.5,
+      "score": 0.0,
+      "n": 1
+    }
+  }
+}
