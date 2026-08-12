@@ -116,3 +116,90 @@ def test_cheap_agreement_gate_escalates_when_fine_missing(monkeypatch):
     )
     assert classify_intent("write a python script to parse csv") == "coding"
     assert get_last_classifier_path()["path"] == "keyword"
+
+
+# ---- 2B.3: cheap-path confidence gate (frozen B thresholds) ----
+
+_FROZEN_GATE = 0.85  # mocked _local_intent_threshold constant — tests stay .env-independent
+
+
+def _mock_cheap(monkeypatch, payload):
+    _reset()
+    _mock_nn(monkeypatch, None, 0.0)
+    monkeypatch.setattr(brain, "JARVIS_LOCAL_AGREEMENT_GATE", False)
+    monkeypatch.setattr(brain, "JARVIS_ROUTER_CHEAP", True)
+    monkeypatch.setattr(brain, "JARVIS_LLM_FIRST", True)
+    monkeypatch.setattr(brain, "NVIDIA_NEMOTRON_API_KEY", "")
+    monkeypatch.setattr(brain, "_cheap_classify", lambda text: payload)
+    monkeypatch.setattr(brain, "_local_intent_threshold", lambda intent: _FROZEN_GATE)
+
+
+def test_cheap_confidence_above_gate_accepts(monkeypatch):
+    _mock_cheap(monkeypatch, {"intent": "coding", "fine_intent": "write_script", "tool_required": True,
+                              "confidence": 0.92})
+    assert classify_intent("hello how are you") == "coding"
+    assert get_last_classifier_path()["path"] == "cheap_groq"
+    assert get_last_classifier_path()["confidence"] == 0.92
+
+
+def test_cheap_confidence_below_gate_escalates(monkeypatch):
+    _mock_cheap(monkeypatch, {"intent": "coding", "fine_intent": "write_script", "tool_required": True,
+                              "confidence": 0.55})
+    assert classify_intent("hello how are you") == "chat"
+    assert get_last_classifier_path()["path"] == "keyword"
+
+
+def test_cheap_confidence_missing_escalates(monkeypatch):
+    _mock_cheap(monkeypatch, {"intent": "coding", "fine_intent": "write_script", "tool_required": True})
+    assert classify_intent("hello how are you") == "chat"
+    assert get_last_classifier_path()["path"] == "keyword"
+
+
+def test_with_cheap_counts_classifier_errors(monkeypatch):
+    import pytest
+
+    from benchmarks import classifier_gate_bench as bench
+
+    if not brain.GROQ_API_KEY:
+        pytest.skip("no GROQ_API_KEY in env or .env — cheap branch unreachable")
+    monkeypatch.setattr(brain, "_cheap_call_count", 0)
+    monkeypatch.setattr(brain, "_cheap_error_count", 0)
+    monkeypatch.setattr(brain, "JARVIS_ROUTER_CHEAP", True)
+    monkeypatch.setattr(brain, "JARVIS_LLM_FIRST", True)
+    monkeypatch.setattr(brain, "JARVIS_ROUTER_POLICY", False)
+    cases = bench.load_cases()[:1]
+
+    def _boom(text):
+        raise RuntimeError("simulated Groq outage")
+
+    monkeypatch.setattr(brain, "_cheap_classify", _boom)
+    summary = bench.run_config("E", cases)
+    assert summary["config"] == "E"
+    assert summary["cheap_calls"] == 1
+    assert summary["cheap_errors"] == 1
+    assert summary["per_case"][0]["path"] != "cheap_groq"
+
+
+def test_with_cheap_runs_config_e(monkeypatch):
+    import pytest
+
+    from benchmarks import classifier_gate_bench as bench
+
+    if not brain.GROQ_API_KEY:
+        pytest.skip("no GROQ_API_KEY in env or .env — cheap branch unreachable")
+    monkeypatch.setattr(brain, "_cheap_call_count", 0)
+    monkeypatch.setattr(brain, "_cheap_error_count", 0)
+    monkeypatch.setattr(brain, "JARVIS_ROUTER_CHEAP", True)
+    monkeypatch.setattr(brain, "JARVIS_LLM_FIRST", True)
+    monkeypatch.setattr(brain, "JARVIS_ROUTER_POLICY", False)
+    cases = bench.load_cases()[:1]
+    monkeypatch.setattr(
+        brain, "_cheap_classify",
+        lambda text: {"intent": "coding", "fine_intent": "write_script", "tool_required": True,
+                      "confidence": 0.99},
+    )
+    summary = bench.run_config("E", cases)
+    assert summary["config"] == "E"
+    assert summary["cheap_calls"] == 1
+    assert summary["cheap_errors"] == 0
+    assert summary["per_case"][0]["path"] == "cheap_groq"

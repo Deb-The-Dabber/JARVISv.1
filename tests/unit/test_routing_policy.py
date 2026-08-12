@@ -109,6 +109,7 @@ class TestClassifierContract:
             "fine_intent": "debug_code",
             "complexity": 2,
             "tool_required": False,
+            "confidence": None,
         }
 
     def test_provider_key_is_rejected(self):

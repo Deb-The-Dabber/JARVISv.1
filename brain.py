@@ -706,6 +706,8 @@ def _local_intent_predict(text: str) -> tuple[str | None, float]:
 _last_fine_intent: str | None = None
 _last_fine_confidence: float = 0.0
 _last_classifier_path: dict | None = None
+_cheap_call_count: int = 0
+_cheap_error_count: int = 0
 
 
 def get_last_classifier_path() -> dict | None:
@@ -880,15 +882,29 @@ def classify_intent(text: str) -> str:
         if JARVIS_ROUTER_CHEAP and GROQ_API_KEY:
             # 2A.2: cheap Groq classifier — replaces the Nemotron classify
             # round-trip. It can only emit intent fields (never a provider).
+            global _cheap_call_count, _cheap_error_count
+            _cheap_call_count += 1
             try:
                 parsed = _cheap_classify(text)
                 classification = parsed["intent"] if parsed else None
             except Exception as e:
+                _cheap_error_count += 1
                 _debug(f"[Intent] cheap classifier error: {e}")
                 classification = None
             if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
                 _debug(f"[Intent] cheap classifier gave '{classification}' (fine={parsed.get('fine_intent')})")
                 escalation = classification == "tool_use" and parsed.get("tool_required") is False
+                # 2B.3: apply the frozen per-intent confidence gate to the cheap path too
+                cheap_conf = parsed.get("confidence")
+                if not escalation and cheap_conf is None:
+                    _debug("[Intent] cheap classifier gave no confidence — escalating to LLM classify")
+                    escalation = True
+                elif not escalation and cheap_conf < _local_intent_threshold(classification):
+                    _debug(
+                        f"[Intent] cheap confidence {cheap_conf:.2f} below gate "
+                        f"{_local_intent_threshold(classification):.2f} — escalating to LLM classify"
+                    )
+                    escalation = True
                 if not escalation and JARVIS_LOCAL_AGREEMENT_GATE and not parsed.get("fine_intent"):
                     _debug("[Intent] agreement gate: cheap intent without fine intent — escalating to LLM classify")
                     escalation = True
