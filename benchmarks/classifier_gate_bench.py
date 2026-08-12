@@ -118,8 +118,8 @@ def run_config(name: str, cases: list[dict]) -> dict:
 
     ok = [r for r in per_case if r.get("path") != "error"]
     accepts = [r for r in ok if r.get("path") == "local_nn"]
-    escalations = [r for r in ok if r.get("path") != "local_nn"]
-    wrong_accepts = [r for r in accepts if not r["correct"]]
+    cheap_routed = [r for r in ok if r.get("path") == "cheap_groq"]
+    escalations = [r for r in ok if r.get("path") not in ("local_nn", "cheap_groq")]
     total = len(per_case)
     correct = sum(1 for r in ok if r["correct"])
     latencies = [r.get("latency_ms", 0) for r in ok]
@@ -135,11 +135,13 @@ def run_config(name: str, cases: list[dict]) -> dict:
         "incorrect": len(ok) - correct,
         "accuracy": round(correct / total, 4) if total else 0,
         "local_nn_accepted": len(accepts),
-        "local_nn_correct_accepts": len(accepts) - len(wrong_accepts),
-        "local_nn_incorrect_accepts": len(wrong_accepts),
+        "local_nn_correct_accepts": len(accepts) - sum(1 for r in accepts if not r["correct"]),
+        "local_nn_incorrect_accepts": sum(1 for r in accepts if not r["correct"]),
+        "cheap_routed": len(cheap_routed),
+        "routed_without_llm": len(accepts) + len(cheap_routed),
         "escalations": len(escalations),
         "escalation_rate": round(len(escalations) / total, 4) if total else 0,
-        "llm_classify_calls_saved": len(accepts),
+        "llm_classify_calls_saved": len(accepts) + len(cheap_routed),
         "escalation_paths": {
             p: sum(1 for r in escalations if r.get("path") == p)
             for p in sorted({r.get("path") for r in escalations if r.get("path")})

@@ -155,13 +155,14 @@ def test_cheap_confidence_missing_escalates(monkeypatch):
     assert get_last_classifier_path()["path"] == "keyword"
 
 
-def test_with_cheap_counts_classifier_errors(monkeypatch):
+def test_with_cheap_counts_classifier_errors(monkeypatch, tmp_path):
     import pytest
 
     from benchmarks import classifier_gate_bench as bench
 
     if not brain.GROQ_API_KEY:
         pytest.skip("no GROQ_API_KEY in env or .env — cheap branch unreachable")
+    monkeypatch.setattr(bench, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(brain, "_cheap_call_count", 0)
     monkeypatch.setattr(brain, "_cheap_error_count", 0)
     monkeypatch.setattr(brain, "JARVIS_ROUTER_CHEAP", True)
@@ -180,13 +181,14 @@ def test_with_cheap_counts_classifier_errors(monkeypatch):
     assert summary["per_case"][0]["path"] != "cheap_groq"
 
 
-def test_with_cheap_runs_config_e(monkeypatch):
+def test_with_cheap_runs_config_e(monkeypatch, tmp_path):
     import pytest
 
     from benchmarks import classifier_gate_bench as bench
 
     if not brain.GROQ_API_KEY:
         pytest.skip("no GROQ_API_KEY in env or .env — cheap branch unreachable")
+    monkeypatch.setattr(bench, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(brain, "_cheap_call_count", 0)
     monkeypatch.setattr(brain, "_cheap_error_count", 0)
     monkeypatch.setattr(brain, "JARVIS_ROUTER_CHEAP", True)
@@ -202,4 +204,5 @@ def test_with_cheap_runs_config_e(monkeypatch):
     assert summary["config"] == "E"
     assert summary["cheap_calls"] == 1
     assert summary["cheap_errors"] == 0
+    assert summary["cheap_routed"] == 1
     assert summary["per_case"][0]["path"] == "cheap_groq"
