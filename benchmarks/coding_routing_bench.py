@@ -124,6 +124,17 @@ def _run_case_inner(case: dict, prompt: str, cost_before: dict) -> dict:
         return {"prompt": prompt, "error": f"classify_intent: {e}", "latency": time.time() - t0}
     intent_ms = round((time.time() - t0) * 1000, 1)
 
+    classifier_path = None
+    try:
+        classifier_path = brain_mod.get_last_classifier_path()
+    except Exception:
+        pass
+    fine_actual = None
+    try:
+        fine_actual = brain_mod.get_last_fine_intent()
+    except Exception:
+        pass
+
     t0_total = time.time()
     try:
         reply = process(prompt)
@@ -216,6 +227,11 @@ def _run_case_inner(case: dict, prompt: str, cost_before: dict) -> dict:
         "passed": passed,
         "reply_preview": (reply or "")[:160],
         "request_id": request_id,
+        "classifier_path": (classifier_path or {}).get("path"),
+        "classifier_confidence": (classifier_path or {}).get("confidence"),
+        "classifier_raw": (classifier_path or {}).get("raw"),
+        "fine_intent_actual": (fine_actual or (None, None))[0],
+        "fine_confidence_actual": (fine_actual or (None, None))[1],
     }
 
 
@@ -290,6 +306,11 @@ def run_suite(cases: list[dict], tag: str, health_seed: str | None = None) -> di
         print(f"[{tag}] case {i}/{len(cases)}: {case['prompt'][:60]}...", flush=True)
         r = _spawn_case(case, i - 1, str(ROOT / "tests" / "eval" / "routing_golden.jsonl"), isolation)
         results.append(r)
+        cases_dir = RESULTS_DIR / "cases"
+        cases_dir.mkdir(parents=True, exist_ok=True)
+        (cases_dir / f"{tag}_{i:02d}.json").write_text(
+            json.dumps({"case": case, "result": r}, indent=2, default=str)
+        )
         status = "PASS" if r.get("passed") else "FAIL/ERR"
         print(
             f"    -> {status} intent={r.get('intent')} provider={r.get('final_provider')} "

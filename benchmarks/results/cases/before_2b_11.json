@@ -1,0 +1,16 @@
+{
+  "case": {
+    "prompt": "Implement retry-with-backoff logic for a network call: retry 3 times with exponential backoff plus jitter.",
+    "expected_intent": "coding",
+    "expected_fine_intent": "implement_feature",
+    "expected_keywords": [
+      "backoff"
+    ],
+    "max_latency": 180
+  },
+  "result": {
+    "prompt": "Implement retry-with-backoff logic for a network call: retry 3 times with exponential backoff plus jitter.",
+    "error": "case killed after 270s (provider stall)",
+    "latency": 270
+  }
+}

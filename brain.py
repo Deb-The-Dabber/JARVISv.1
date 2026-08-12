@@ -704,6 +704,13 @@ def _local_intent_predict(text: str) -> tuple[str | None, float]:
 
 _last_fine_intent: str | None = None
 _last_fine_confidence: float = 0.0
+_last_classifier_path: dict | None = None
+
+
+def get_last_classifier_path() -> dict | None:
+    """Classifier path (local_nn/cheap_groq/nemotron/keyword/cad/...) from the most
+    recent classify_intent call, with confidence and raw output where available."""
+    return _last_classifier_path
 
 
 def get_last_fine_intent() -> tuple[str | None, float]:
@@ -732,8 +739,27 @@ def _local_fine_predict(text: str, coarse: str) -> tuple[str | None, float]:
 
 def _clear_fine_intent() -> None:
     """Reset fine-intent globals so stale values from a prior request never leak."""
-    global _last_fine_intent, _last_fine_confidence
+    global _last_fine_intent, _last_fine_confidence, _last_classifier_path
     _last_fine_intent, _last_fine_confidence = None, 0.0
+    _last_classifier_path = None
+    _last_fine_intent, _last_fine_confidence = None, 0.0
+
+
+def _log_classifier_path(
+    path: str,
+    intent: str,
+    confidence: float | None = None,
+    raw: dict | None = None,
+) -> None:
+    """2B.0 telemetry: record which classifier produced an intent decision."""
+    measurable = {"path": path, "intent": intent}
+    if confidence is not None:
+        measurable["confidence"] = round(float(confidence), 3)
+    if raw:
+        measurable["raw"] = raw
+    global _last_classifier_path
+    _last_classifier_path = measurable
+    log_decision("understand", "classifier_path", measurable_inputs=measurable)
 
 
 def classify_intent(text: str) -> str:
@@ -767,13 +793,16 @@ def classify_intent(text: str) -> str:
     if any(f in t for f in self_mod_files):
         if any(v in t for v in self_mod_verbs):
             _debug(f"[Intent] classify_intent('{text}'): 'self_mod' — file + verb")
+            _log_classifier_path("keyword", "self_mod")
             return "self_mod"
     if any(f in t for f in self_mod_files_with_path):
         _debug(f"[Intent] classify_intent('{text}'): 'self_mod' — file path")
+        _log_classifier_path("keyword", "self_mod")
         return "self_mod"
     if any(k in t for k in ("my code", "jarvis code")):
         if any(v in t for v in self_mod_verbs):
             _debug(f"[Intent] classify_intent('{text}'): 'self_mod' — keyword + verb")
+            _log_classifier_path("keyword", "self_mod")
             return "self_mod"
 
     # CAD / Onshape — keyword-first detection before LLM (like self_mod)
@@ -782,6 +811,7 @@ def classify_intent(text: str) -> str:
     cad_pattern = re.compile(r"\b(" + "|".join(re.escape(k) for k in CAD_KEYWORDS) + r")\b")
     if cad_pattern.search(t) or "cad.onshape.com" in t or "/documents/" in t:
         _debug(f"[Intent] classify_intent('{text}'): 'cad' — CAD keyword/URL")
+        _log_classifier_path("keyword", "cad")
         return "cad"
 
     # Memory triggers — handled directly in process(), not via tools
@@ -798,6 +828,7 @@ def classify_intent(text: str) -> str:
     )
     if any(k in t for k in memory_triggers):
         _debug(f"[Intent] classify_intent('{text}'): 'chat' — memory trigger")
+        _log_classifier_path("memory", "chat")
         return "chat"
 
     # Knowledge/memory queries — handled directly in process()
@@ -809,12 +840,14 @@ def classify_intent(text: str) -> str:
     )
     if any(k in t for k in knowledge_triggers):
         _debug(f"[Intent] classify_intent('{text}'): 'chat' — knowledge query")
+        _log_classifier_path("knowledge", "chat")
         return "chat"
 
     # Check intent cache (per-turn)
     if text in conversation_context.intent_cache:
         cached = conversation_context.intent_cache[text]
         _debug(f"[Intent] classify_intent('{text}'): '{cached}' — cached")
+        _log_classifier_path("cache", cached)
         return cached
 
     # Local NN fast-path — skip cloud LLM when the on-device router is confident.
@@ -828,6 +861,10 @@ def classify_intent(text: str) -> str:
             _fine, _fine_conf = _local_fine_predict(text, _local_intent)
             if _fine is not None:
                 _debug(f"[Intent] fine: '{_fine}' ({_fine_conf:.2f})")
+            _log_classifier_path(
+                "local_nn", _local_intent, confidence=_local_conf,
+                raw={"fine": _fine, "fine_conf": _fine_conf},
+            )
             return _local_intent
 
     # LLM‑first classification for remaining cases (≈90% of cases)
@@ -843,6 +880,7 @@ def classify_intent(text: str) -> str:
                 classification = None
             if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
                 _debug(f"[Intent] cheap classifier gave '{classification}' (fine={parsed.get('fine_intent')})")
+                _log_classifier_path("cheap_groq", classification, confidence=parsed.get("confidence"), raw=parsed)
                 try:
                     if parsed.get("fine_intent"):
                         _last_fine_intent, _last_fine_confidence = parsed["fine_intent"], 0.6
@@ -863,6 +901,7 @@ def classify_intent(text: str) -> str:
                 )
                 if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
                     _debug(f"[Intent] LLM classification gave '{classification}'")
+                    _log_classifier_path("nemotron", classification)
                     # If LLM says 'chat' but text matches reasoning patterns, defer to keyword fallback
                     reasoning_patterns = (
                         "why does", "why is", "why are", "why would", "why did", "why do",
@@ -884,6 +923,7 @@ def classify_intent(text: str) -> str:
     cad_pattern = re.compile(r"\b(" + "|".join(re.escape(k) for k in CAD_KEYWORDS) + r")\b")
     if cad_pattern.search(t) or "cad.onshape.com" in t:
         _debug(f"[Intent] classify_intent('{text}'): 'cad' — CAD keyword/URL")
+        _log_classifier_path("keyword", "cad")
         return "cad"
 
     # Keyword fallback for remaining cases
@@ -894,6 +934,7 @@ def classify_intent(text: str) -> str:
 
     if coding_hit and not tool_hit:
         _debug(f"[Intent] classify_intent('{text}'): 'coding' — coding keyword")
+        _log_classifier_path("keyword", "coding")
         return "coding"
 
     # Both coding and tool keywords — disambiguate
@@ -918,13 +959,16 @@ def classify_intent(text: str) -> str:
         )
         if any(k in t for k in tool_verbs):
             _debug(f"[Intent] classify_intent('{text}'): 'tool_use' — both keywords, disambig→tool")
+            _log_classifier_path("keyword", "tool_use")
             return "tool_use"
         _debug(f"[Intent] classify_intent('{text}'): 'coding' — both keywords, disambig→coding")
+        _log_classifier_path("keyword", "coding")
         return "coding"
 
     # Tool use
     if tool_hit:
         _debug(f"[Intent] classify_intent('{text}'): 'tool_use' — tool keyword")
+        _log_classifier_path("keyword", "tool_use")
         return "tool_use"
 
     # Reasoning — use phrases to avoid matching casual greetings like "hello how are you"
@@ -955,6 +999,7 @@ def classify_intent(text: str) -> str:
     )
     if any(k in t for k in reasoning_patterns):
         _debug(f"[Intent] classify_intent('{text}'): 'reasoning' — reasoning pattern")
+        _log_classifier_path("keyword", "reasoning")
         return "reasoning"
 
     # Capability/gap analysis — questions about what Jarvis can do or is missing
@@ -971,14 +1016,17 @@ def classify_intent(text: str) -> str:
     ]
     if any(re.search(p, t) for p in capability_gap_patterns):
         _debug(f"[Intent] classify_intent('{text}'): 'tool_use' — capability/gap analysis")
+        _log_classifier_path("keyword", "tool_use")
         return "tool_use"
 
     # File extension hint — .py files imply coding
     if re.search(r"\b\w+\.(py|js|ts|java|cpp|c|h|go|rs|rb|sh)\b", t):
         _debug(f"[Intent] classify_intent('{text}'): 'coding' — file extension")
+        _log_classifier_path("keyword", "coding")
         return "coding"
 
     _debug(f"[Intent] classify_intent('{text}'): 'chat' — default fallback")
+    _log_classifier_path("keyword", "chat")
     conversation_context.intent_cache[text] = "chat"
     return "chat"
 

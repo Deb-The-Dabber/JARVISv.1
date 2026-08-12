@@ -1,0 +1,44 @@
+{
+  "case": {
+    "prompt": "How can I make this nested if-else chain more readable? Propose a dict-dispatch refactor.",
+    "expected_intent": "coding",
+    "expected_fine_intent": "improve_code",
+    "expected_keywords": [
+      "dict"
+    ],
+    "max_latency": 180
+  },
+  "result": {
+    "prompt": "How can I make this nested if-else chain more readable? Propose a dict-dispatch refactor.",
+    "intent": "coding",
+    "expected_intent": "coding",
+    "intent_accuracy": 1.0,
+    "fine_intent": "improve_code",
+    "expected_provider_class": "",
+    "final_provider": "nemotron_ultra",
+    "provider_class_match": null,
+    "tools_called": [],
+    "tool_accuracy": 1.0,
+    "keyword_recall": 1.0,
+    "intent_latency_ms": 8590.9,
+    "routing_latency_ms": 39440.7,
+    "total_latency_ms": 65042.7,
+    "max_latency_s": 180,
+    "latency_ok": true,
+    "providers_attempted": [],
+    "fallback_count": 0,
+    "cost": {
+      "tokens_input_total": 0,
+      "tokens_output_total": 0,
+      "cost_usd_total": 0.001884
+    },
+    "passed": true,
+    "reply_preview": "Dict-dispatch refactor for nested if-else chains:\n\n1. **Extract each branch into a handler function** - each becomes independently testable\n2. **Build a dispatc",
+    "request_id": "6b1f43fb-7a2",
+    "classifier_path": "local_nn",
+    "classifier_confidence": 0.735,
+    "classifier_raw": null,
+    "fine_intent_actual": null,
+    "fine_confidence_actual": 0.0
+  }
+}

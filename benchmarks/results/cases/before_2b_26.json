@@ -1,0 +1,43 @@
+{
+  "case": {
+    "prompt": "Design the endpoints for a file upload service with resumable uploads.",
+    "expected_intent": "coding",
+    "expected_fine_intent": "design_api",
+    "max_latency": 180
+  },
+  "result": {
+    "prompt": "Design the endpoints for a file upload service with resumable uploads.",
+    "intent": "coding",
+    "expected_intent": "coding",
+    "intent_accuracy": 1.0,
+    "fine_intent": "design_api",
+    "expected_provider_class": "",
+    "final_provider": "nemotron_ultra",
+    "provider_class_match": null,
+    "tools_called": [
+      "create_file"
+    ],
+    "tool_accuracy": 1.0,
+    "keyword_recall": 0.0,
+    "intent_latency_ms": 58585.5,
+    "routing_latency_ms": 62108.2,
+    "total_latency_ms": 43407.9,
+    "max_latency_s": 180,
+    "latency_ok": true,
+    "providers_attempted": [],
+    "fallback_count": 0,
+    "cost": {
+      "tokens_input_total": 0,
+      "tokens_output_total": 0,
+      "cost_usd_total": 0.000962
+    },
+    "passed": true,
+    "reply_preview": "Created a comprehensive API design document at `~/Desktop/resumable_upload_api_design.md` covering:\n\n- **6 core endpoints** for session creation, chunk upload, ",
+    "request_id": "6198c807-4b2",
+    "classifier_path": "nemotron",
+    "classifier_confidence": null,
+    "classifier_raw": null,
+    "fine_intent_actual": null,
+    "fine_confidence_actual": 0.0
+  }
+}
