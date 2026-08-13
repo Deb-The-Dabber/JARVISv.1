@@ -123,8 +123,25 @@ def _daily_budget_exceeded() -> tuple[bool, float, float]:
 
 GEMINI_TOOL_MODEL = "gemini-2.5-flash"
 GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"]
-NIM_MODEL_TIER5 = ["meta/llama-4-maverick-17b-128e-instruct", "minimaxai/minimax-m2.7"]
-NIM_MODEL_TIER6 = ["qwen/qwen3.5-397b-a17b", "mistralai/mistral-large-3-675b-instruct-2512"]
+# NIM slot ladder (2C): functional slots replace the legacy numeric tiers.
+# All models verified live on build.nvidia.com free endpoints (2026-08-13).
+NIM_MODEL_FAST = [
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+    "nvidia/nemotron-3-nano-30b-a3b",
+    "stepfun-ai/step-3.7-flash",
+]
+NIM_MODEL_CODING = [
+    "minimaxai/minimax-m3",
+    "openai/gpt-oss-20b",
+    "deepseek-ai/deepseek-v4-flash-0731",
+]
+NIM_MODEL_FRONTIER = [
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "minimaxai/minimax-m3",
+]
+# Defined but NOT registered as an active routing slot: the E4 probe must
+# prove reliable (<10s) latency first (2026-08-13 probe: 21.7s for 1 token).
+NIM_MODEL_REASONING = ["nvidia/nemotron-3-super-120b-a12b"]
 GROQ_MODEL = "llama-3.3-70b-versatile"
 # OpenRouter free tier: use a known working free model
 OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
@@ -205,17 +222,23 @@ _POLICY_PRIMARY_CALLS: dict[str, tuple[str, object, object, str]] = {
         lambda u: ask_groq(u, []),
         GROQ_MODEL,
     ),
-    "nvidia_nim_tier_5": (
-        "NVIDIA NIM Tier 5",
+    "nim_fast": (
+        "NIM Fast",
         lambda: bool(NVIDIA_NEMOTRON_API_KEY),
-        lambda u: ask_nim_tier5(u, []),
-        NIM_MODEL_TIER5[0],
+        lambda u: ask_nim_fast(u, []),
+        NIM_MODEL_FAST[0],
     ),
-    "nvidia_nim_tier_6": (
-        "NVIDIA NIM Tier 6",
+    "nim_coding": (
+        "NIM Coding",
         lambda: bool(NVIDIA_NEMOTRON_API_KEY),
-        lambda u: ask_nim_tier6(u, []),
-        NIM_MODEL_TIER6[0],
+        lambda u: ask_nim_coding(u, []),
+        NIM_MODEL_CODING[0],
+    ),
+    "nim_frontier": (
+        "NIM Frontier",
+        lambda: bool(NVIDIA_NEMOTRON_API_KEY),
+        lambda u: ask_nemotron_ultra(u, [], timeout=90),
+        NIM_MODEL_FRONTIER[0],
     ),
     "openrouter": (
         "OpenRouter",
@@ -1949,6 +1972,37 @@ def ask_nemotron_ultra(
     tool_results: list[str],
     timeout: float = 90,
     reasoning_budget: int | None = None,
+    models: list[str] | None = None,
+) -> str:
+    """Nemotron Ultra with in-slot understudy (NIM_MODEL_FRONTIER).
+
+    Tries each model in order under the same bounded timeout; only when the
+    whole slot is exhausted is the last exception re-raised, so the provider
+    chain records a real failure instead of a silent half-answer.
+    """
+    models_to_try = models or NIM_MODEL_FRONTIER
+    last_exc: Exception | None = None
+    for model in models_to_try:
+        try:
+            return _ask_nemotron_ultra_model(
+                user_message,
+                tool_results,
+                model=model,
+                timeout=timeout,
+                reasoning_budget=reasoning_budget,
+            )
+        except Exception as e:
+            _debug(f"Nemotron model {model} failed: {e}")
+            last_exc = e
+    raise last_exc if last_exc else Exception("NIM frontier slot exhausted")
+
+
+def _ask_nemotron_ultra_model(
+    user_message: str,
+    tool_results: list[str],
+    model: str = NEMOTRON_ULTRA_MODEL,
+    timeout: float = 90,
+    reasoning_budget: int | None = None,
 ) -> str:
     from openai import OpenAI
 
@@ -1979,12 +2033,12 @@ def ask_nemotron_ultra(
         is_last_iter = _nemotron_loop_count >= 4
         tc = "none" if is_last_iter else "auto"
         response = client.chat.completions.create(
-            model=NEMOTRON_ULTRA_MODEL,
+            model=model,
             messages=messages,
             temperature=1,
             top_p=0.95,
             max_tokens=4096,
-            extra_body=_nemotron_extra_body(reasoning_budget),
+            extra_body=_nemotron_extra_body(reasoning_budget) if "nemotron" in model else None,
             tools=_build_openai_tools() if not is_last_iter else [],
             tool_choice=tc,
             timeout=timeout,
@@ -3208,7 +3262,7 @@ def ask_nim_with_context(user_message: str, tool_results: list[str], models: lis
     client = OpenAI(api_key=api_key, base_url=base_url)
     messages = _build_nim_messages(user_message, tool_results)
 
-    models_to_try = models or NIM_MODEL_TIER5
+    models_to_try = models or NIM_MODEL_FAST
     last_exc = Exception("No NIM model attempted")
     for model in models_to_try:
         try:
@@ -3350,14 +3404,14 @@ def _ask_nim_loop(client, messages: list, model: str, provider_name: str = "NVID
     raise Exception(f"{provider_name} tool execution did not resolve")
 
 
-def ask_nim_tier5(user_message: str, tool_results: list[str]) -> str:
-    """NIM Tier 5: Llama 4 Maverick → MiniMax M2.7 (Phase 2.1)."""
-    return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_TIER5, provider_name="NVIDIA NIM Tier 5")
+def ask_nim_fast(user_message: str, tool_results: list[str]) -> str:
+    """NIM Fast slot: super-49b-v1.5 → nano-30b → step-3.7 (verified 0.3-0.4s)."""
+    return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_FAST, provider_name="NIM Fast")
 
 
-def ask_nim_tier6(user_message: str, tool_results: list[str]) -> str:
-    """NIM Tier 6: Qwen 3.5 → Mistral Large 3 (Phase 2.1)."""
-    return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_TIER6, provider_name="NVIDIA NIM Tier 6")
+def ask_nim_coding(user_message: str, tool_results: list[str]) -> str:
+    """NIM Coding slot: minimax-m3 → gpt-oss-20b → deepseek-v4-flash (verified 1.1-1.8s)."""
+    return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_CODING, provider_name="NIM Coding")
 
 
 def _cheap_classify(user_message: str) -> dict | None:
@@ -4167,16 +4221,16 @@ def ask_with_tools(user_message: str) -> str:
     # Sort providers by health score descending for intelligent fallback
     _provider_health_scores.setdefault("Gemini", 100)
     _provider_health_scores.setdefault("Groq", 100)
-    _provider_health_scores.setdefault("NVIDIA NIM Tier 5", 100)
-    _provider_health_scores.setdefault("NVIDIA NIM Tier 6", 100)
+    _provider_health_scores.setdefault("NIM Fast", 100)
+    _provider_health_scores.setdefault("NIM Coding", 100)
     _provider_health_scores.setdefault("OpenRouter", 100)
     _provider_health_scores.setdefault("Pollinations", 100)
 
     raw_providers = [
         ("Gemini", _gemini_available() and _provider_available("Gemini"), lambda: ask_gemini(user_message)),
         ("Groq", bool(GROQ_API_KEY), lambda: ask_groq(user_message, combined_results)),
-        ("NVIDIA NIM Tier 5", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_tier5(user_message, combined_results)),
-        ("NVIDIA NIM Tier 6", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_tier6(user_message, combined_results)),
+        ("NIM Fast", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_fast(user_message, combined_results)),
+        ("NIM Coding", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_coding(user_message, combined_results)),
         ("OpenRouter", bool(OPENROUTER_API_KEY), lambda: ask_openrouter(user_message, combined_results)),
         ("Pollinations", True, lambda: ask_pollinations(user_message, combined_results)),
     ]

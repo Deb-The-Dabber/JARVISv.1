@@ -127,13 +127,16 @@ User → Intent Router → Nemotron Ultra (primary) → Fallbacks
 
 | Tier | Provider | Role |
 |------|----------|------|
-| 1 | **Nemotron 3 Ultra** | Primary — tool-first + final response (tool calling + reasoning) |
+| 1 | **Nemotron 3 Ultra** (→ MiniMax M3 understudy) | Primary — tool-first + final response (frontier slot head; in-slot understudy auto-fails over) |
 | 2 | **Gemini 2.5 Flash** | Fallback — excellent tool calling, used when Nemotron unavailable |
 | 3 | **Groq llama-3.3-70b** | Fallback — full tools support via modern `tool_choice` format |
-| 4 | **NVIDIA NIM Tier 5** | Llama 4 Maverick → MiniMax M2.7 (split blast radius) |
-| 5 | **NVIDIA NIM Tier 6** | Qwen 3.5 (397B MoE) → Mistral Large 3 (split blast radius) |
-| 6 | **OpenRouter deepseek-r1** | Last-resort fallback |
-| 7 | **Pollinations.ai** | No-key emergency fallback |
+| 4 | **NIM Fast** | super-49b-v1.5 → nano-30b → step-3.7-flash (low-effort/chat fast path) |
+| 5 | **NIM Coding** | minimax-m3 → gpt-oss-20b → deepseek-v4-flash (coding/agentic) |
+| 6 | **NIM Frontier** (scoring slot) | ultra → minimax-m3 understudy; the probe/low-effort chain's frontier entry |
+| 7 | **OpenRouter deepseek-r1** | Last-resort fallback |
+| 8 | **Pollinations.ai** | No-key emergency fallback |
+
+NIM slots replace the legacy Tier 5/6 lists (Llama 4 Maverick, MiniMax M2.7, Qwen 3.5, Mistral Large 3 — all removed from the build.nvidia.com catalog). `NIM_MODEL_REASONING` (nemotron-3-super-120b-a12b) is **defined but not registered** — the E4 probe (`scripts/nim_probe.py`, `~/.jarvis/nim_probe.jsonl`) gates its activation (<10s median). Vision still uses `nvidia/llama-3.1-nemotron-nano-vl-8b-v1` (working endpoint). Nano-Omni (`nemotron-3-nano-omni-30b-a3b-reasoning`) is the designated replacement — 400/Function-gate with both keys on 2026-08-13; the E4 probe (`scripts/nim_probe.py`) tracks its recovery and the swap flips when it serves 200. All slots are free endpoints under one `NVIDIA_NEMOTRON_API_KEY`.
 
 ### Phase 2A routing policy (optional, default off)
 

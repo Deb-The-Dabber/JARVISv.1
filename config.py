@@ -103,6 +103,13 @@ SAFETY_PENDING_TTL = int(os.getenv("SAFETY_PENDING_TTL", "86400"))  # 24h defaul
 MODEL_CONTEXT_LIMITS = {
     "nvidia/nemotron-3-ultra-550b-a55b": 8192,
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": 8192,
+    "nvidia/nemotron-3-super-120b-a12b": 32768,
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5": 32768,
+    "nvidia/nemotron-3-nano-30b-a3b": 32768,
+    "stepfun-ai/step-3.7-flash": 32768,
+    "minimaxai/minimax-m3": 32768,
+    "openai/gpt-oss-20b": 32768,
+    "deepseek-ai/deepseek-v4-flash-0731": 32768,
     "gemini-3.5-flash": 32768,
     "gemini-2.5-flash": 32768,
     "deepseek-ai/deepseek-v4-flash": 32768,
