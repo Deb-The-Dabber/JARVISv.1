@@ -10,7 +10,7 @@ source venv/bin/activate
 JARVIS_DEBUG=1 ./run_jarvis.sh  # enable [DEBUG] brain logs (also appends to ~/.jarvis/logs/debug.log)
 
 # Server/API mode (mobile UI via Tailscale)
-python server.py             # listens on :8000
+python server.py             # listens on :8002
 ```
 
 Terminal modes: `m` (manual — press Enter to record or type), `w` (wake word — "Hey Jarvis"), `q` (quit).
@@ -62,7 +62,7 @@ Constants in `config.py` (user info, paths, TTLs, models).
 | File | Role |
 |------|------|
 | `terminal.py` | CLI: voice/text → brain → TTS, wake word loop, proactive engine |
-| `server.py` | FastAPI :8000: `/ask`, `/ask-voice`, `/health`, `/system`, `/weather`, `/recap`, `/memories`, `/priorities`, `/audit`, `/brain/reset`, `/oauth/*`, `/learner/*`, `/inspect` |
+| `server.py` | FastAPI :8002: `/ask`, `/ask-voice`, `/health`, `/system`, `/weather`, `/recap`, `/memories`, `/priorities`, `/audit`, `/brain/reset`, `/oauth/*`, `/learner/*`, `/inspect` |
 | `brain.py` | Provider chain, tool calling, safety gating, tool definitions, intent router, circuit breaker, `_tool_call_names` tracking, `get_last_tool_calls()` |
 | `routing_policy.py` | Optional policy-driven provider selection (Phase 2A): capability/latency/cost/health scoring, hard gates, classifier-output parsing. Wired via `JARVIS_ROUTER_POLICY` / `JARVIS_ROUTER_CHEAP` |
 | `benchmarks/` | Coding-routing benchmark harness (`coding_routing_bench.py`, `compare_bench.py`, `tests/eval/routing_golden.jsonl`, `results/`) |
@@ -150,7 +150,7 @@ User → Intent Router → Nemotron Ultra (primary) → Fallbacks
 | ChromaDB dimension error | Embedding model changed | Auto-migrates: export → recreate → re-embed |
 | Wake word unresponsive | Mic permission lost | Check System Settings → Privacy → Microphone |
 | Any 503 on Gemini | `GOOGLE_API_KEY` set to non-Google key | Delete it from `.env` — keep only `GOOGLE_GENAI_API_KEY` |
-| Stale :8000 process | Previous server didn't shut down cleanly | `_free_port()` in conftest.py kills it automatically |
+| Stale :8002 process | Previous server didn't shut down cleanly | `_free_port()` in conftest.py kills it automatically |
 | Mock provider refused | Port 18889 in use | `_free_port()` kills stale mock server processes |
 
 ## macOS Permissions
@@ -197,7 +197,7 @@ source venv/bin/activate && python terminal.py
 
 API smoke test:
 ```bash
-curl http://localhost:8000/health && echo ""
-curl http://localhost:8000/system && echo ""
+curl http://localhost:8002/health && echo ""
+curl http://localhost:8002/system && echo ""
 ```
 

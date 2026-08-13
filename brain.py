@@ -51,6 +51,8 @@ GEMINI_API_KEY = _env("GOOGLE_GENAI_API_KEY")
 NVIDIA_API_KEY = _env("NVIDIA_API_KEY")
 NVIDIA_NEMOTRON_API_KEY = _env("NVIDIA_NEMOTRON_API_KEY")
 GROQ_API_KEY = _env("GROQ_API_KEY")
+if os.getenv("JARVIS_DISABLE_GROQ", "0") == "1":
+    GROQ_API_KEY = ""
 OPENROUTER_API_KEY = _env("OPENROUTER_API_KEY")
 HUGGINGFACE_TOKEN = _env("HUGGINGFACE_TOKEN")
 
@@ -63,6 +65,9 @@ JARVIS_LLM_FIRST = os.getenv("JARVIS_LLM_FIRST", "1") == "1"
 # classifier (Groq) used when the local NN is not confident.
 JARVIS_ROUTER_POLICY = os.getenv("JARVIS_ROUTER_POLICY", "0") == "1"
 JARVIS_ROUTER_CHEAP = os.getenv("JARVIS_ROUTER_CHEAP", "0") == "1"
+# Latency policy (vNext): effort-tier routing via latency_policy.py. Pure
+# routing-layer change — the E3/2B classifier and its gates are untouched.
+JARVIS_LATENCY_POLICY = os.getenv("JARVIS_LATENCY_POLICY", "0") == "1"
 JARVIS_LOCAL_ENABLED = os.getenv("JARVIS_LOCAL_ENABLED", "1") == "1"
 JARVIS_EVAL_MODE = os.getenv("JARVIS_EVAL_MODE", "0") == "1"
 JARVIS_LOCAL_INTENT_ENABLED = os.getenv("JARVIS_LOCAL_INTENT_ENABLED", "1") == "1"
@@ -247,17 +252,48 @@ def _policy_candidate_order(intent: str) -> list[dict]:
     Hard eligibility (unavailable / health < 30 -> INVALID) happens inside
     score_candidates; the result is decision-logged for telemetry (2A.4).
     """
-    from routing_policy import PROVIDER_PROFILES, score_candidates
+    return _candidate_order_scored(intent)
+
+
+def _effort_candidate_order(intent: str, weights: dict, prof: dict) -> list[dict]:
+    """Latency-policy chain: score the fleet with effort-adjusted weights,
+    filtered to providers that fit the task profile's constraints."""
+    return _candidate_order_scored(
+        intent,
+        weights=weights,
+        min_capability=prof.get("capability_floor"),
+        max_latency_ms=prof.get("latency_cap_ms"),
+    )
+
+
+def _candidate_order_scored(
+    intent: str,
+    weights: dict | None = None,
+    min_capability: float | None = None,
+    max_latency_ms: float | None = None,
+) -> list[dict]:
+    """Assemble live candidate facts and score them (deterministic).
+
+    Optional effort filters (latency-policy only):
+      min_capability   drop providers whose capability fit is below this
+      max_latency_ms   drop providers whose base latency exceeds this
+    """
+    from routing_policy import PROVIDER_PROFILES, capability_fit, score_candidates
 
     health_view = get_provider_health()
     cands = []
     for key, (display, available_fn, _fn, _model) in _POLICY_PRIMARY_CALLS.items():
         profile = PROVIDER_PROFILES.get(key, {})
+        base_lat = profile.get("base_latency_ms")
+        if max_latency_ms is not None and base_lat is not None and base_lat > max_latency_ms:
+            continue
+        if min_capability is not None and capability_fit(intent, profile) < min_capability:
+            continue
         h = health_view.get(display, {})
         health = h.get("health_score", 100)
         latency_ms = _observed_latency_ms(display)
-        if latency_ms is None and profile.get("base_latency_ms"):
-            latency_ms = profile["base_latency_ms"]
+        if latency_ms is None and base_lat:
+            latency_ms = base_lat
         try:
             avail = bool(available_fn()) and not _backoff_active(display)
         except Exception:
@@ -270,7 +306,7 @@ def _policy_candidate_order(intent: str) -> list[dict]:
         budget_warning = bool(budget and budget > 0 and not exceeded and spent / budget > 0.75)
     except Exception:
         budget_warning = False
-    ordered = score_candidates(intent, cands, budget_warning=budget_warning)
+    ordered = score_candidates(intent, cands, budget_warning=budget_warning, weights=weights)
     _log_policy_decision(intent, ordered)
     return ordered
 
@@ -1819,6 +1855,37 @@ def _prefetch_tools_for_message(user_message: str) -> list[str]:
     return results
 
 
+def _format_short_circuit(prefetched: list[str]) -> str | None:
+    """T1: turn a locally prefetched tool result into a natural reply with
+    zero LLM calls. Returns None when the data isn't template-able."""
+    for r in prefetched:
+        if r.startswith("get_weather_detailed: "):
+            data = r[len("get_weather_detailed: ") :]
+            try:
+                temp = re.search(r"Temperature: ([^,]+)", data)
+                cond = re.search(r"°F,\s*([^.]*)\.", data)
+                hum = re.search(r"Humidity: (\d+)%", data)
+                wind = re.search(r"Wind: ([\d.]+) mph", data)
+                rain = re.search(r"Rain chance next 3 hours: (\d+)%", data)
+                parts = []
+                if temp:
+                    parts.append(f"Currently {temp.group(1).strip()}")
+                if cond:
+                    parts.append(cond.group(1).strip())
+                if hum:
+                    parts.append(f"humidity {hum.group(1)}%")
+                if wind:
+                    parts.append(f"wind at {wind.group(1)} mph")
+                if rain:
+                    parts.append(f"{rain.group(1)}% chance of rain in the next 3 hours")
+                if parts:
+                    return ", ".join(parts) + "."
+            except Exception:
+                pass
+            return data
+    return None
+
+
 def _sanitize_assistant_text(text: str) -> str:
     """Strip malformed structured blobs and reasoning artifacts some models return as plain text."""
     if not text:
@@ -1868,7 +1935,21 @@ def _sanitize_assistant_text(text: str) -> str:
     return stripped
 
 
-def ask_nemotron_ultra(user_message: str, tool_results: list[str], timeout: float = 90) -> str:
+def _nemotron_extra_body(reasoning_budget: int | None) -> dict:
+    """Build the NIM extra_body for a reasoning budget (None -> legacy 2048)."""
+    budget = reasoning_budget if reasoning_budget is not None else 2048
+    body: dict = {"chat_template_kwargs": {"enable_thinking": budget > 0}}
+    if budget > 0:
+        body["reasoning_budget"] = budget
+    return body
+
+
+def ask_nemotron_ultra(
+    user_message: str,
+    tool_results: list[str],
+    timeout: float = 90,
+    reasoning_budget: int | None = None,
+) -> str:
     from openai import OpenAI
 
     api_key = NVIDIA_NEMOTRON_API_KEY
@@ -1903,10 +1984,7 @@ def ask_nemotron_ultra(user_message: str, tool_results: list[str], timeout: floa
             temperature=1,
             top_p=0.95,
             max_tokens=4096,
-            extra_body={
-                "chat_template_kwargs": {"enable_thinking": True},
-                "reasoning_budget": 2048,
-            },
+            extra_body=_nemotron_extra_body(reasoning_budget),
             tools=_build_openai_tools() if not is_last_iter else [],
             tool_choice=tc,
             timeout=timeout,
@@ -3845,6 +3923,67 @@ def ask_with_tools(user_message: str) -> str:
         )
         _debug(f"[Router] Semantic cache bypass for intent={intent}")
 
+    # ── Latency policy: effort tier → provider-agnostic scoring ──
+    # Pure routing-layer change (vNext): the E3/2B classifier and its gates
+    # are untouched. This only decides WHO answers and HOW HARD they think.
+    _effort_budget: int | None = None
+    if JARVIS_LATENCY_POLICY and intent != "cad":
+        from latency_policy import EFFORT_WEIGHTS, task_profile
+
+        prof = task_profile(intent, user_message, _estimate_task_complexity(user_message))
+        log_decision(
+            phase="act",
+            decision="task_profile",
+            decision_source="latency_policy",
+            measurable_inputs=dict(prof),
+        )
+        _debug(f"[Latency] profile: {prof}")
+        if prof.get("short_circuit") or intent == "tool_use":
+            prefetched_hint = _prefetch_tools_for_message(user_message)
+        else:
+            prefetched_hint = []
+        if prof.get("short_circuit"):
+            sc = _format_short_circuit(prefetched_hint)
+            if sc is not None:
+                log_decision(
+                    phase="act",
+                    decision="short_circuit_reply",
+                    decision_source="latency_policy",
+                    outcome="success",
+                    measurable_inputs={"tier": "T1", "llm_calls": 0},
+                )
+                _debug("[Latency] T1 short-circuit reply (0 LLM calls)")
+                _last_provider_used = "short_circuit"
+                _last_model_used = "prefetched_tool_data"
+                return sc
+        if prof["effort"] == "low":
+            ordered = _effort_candidate_order(intent, EFFORT_WEIGHTS["low"], prof)
+            eligible = [e for e in ordered if e.get("status") == "eligible"]
+            _debug(f"[Latency] low-effort chain: {[e['provider'] for e in eligible]}")
+            for _cand in eligible:
+                _key = _cand["provider"]
+                _display, _avail, _ask_fn, _model = _POLICY_PRIMARY_CALLS[_key]
+                try:
+                    if not _avail() or not _provider_available(_display):
+                        continue
+                except Exception:
+                    continue
+                try:
+                    _debug(f"[Latency] low-effort primary: {_display}")
+                    _last_provider_used = _key
+                    _last_model_used = _model
+                    if _key == "groq":
+                        reply = _retry(lambda: ask_groq(user_message, prefetched_hint), max_retries=1)
+                    else:
+                        reply = _retry(lambda: _ask_fn(user_message), max_retries=1)
+                    _record_provider_success(_display)
+                    return reply
+                except Exception as e:
+                    _debug(f"[Latency] {_display} low-effort attempt failed: {e}")
+                    _handle_provider_failure(_display, e)
+            _debug("[Latency] low-effort chain exhausted — falling through to standard chain")
+        _effort_budget = prof.get("thinking_budget", 2048)
+
     # ── Primary: deterministic (policy or Nemotron-default) tool-first + final ──
     _nemotron_attempted = False
     if JARVIS_LLM_FIRST:
@@ -3873,7 +4012,12 @@ def ask_with_tools(user_message: str) -> str:
                 _last_provider_used = "nemotron_ultra"
                 _last_model_used = NEMOTRON_ULTRA_MODEL
                 _nemotron_usage_count += 1
-                reply = _retry(lambda: ask_nemotron_ultra(user_message, []), max_retries=2)
+                reply = _retry(
+                lambda: ask_nemotron_ultra(
+                    user_message, [], reasoning_budget=_effort_budget
+                ),
+                max_retries=2,
+            )
                 if has_pending_safe():
                     with _pending_lock:
                         pending_tool = _pending_safe.get("tool", "that")
@@ -3919,7 +4063,12 @@ def ask_with_tools(user_message: str) -> str:
             _last_provider_used = "nemotron_ultra"
             _last_model_used = NEMOTRON_ULTRA_MODEL
             _nemotron_usage_count += 1
-            reply = _retry(lambda: ask_nemotron_ultra(user_message, []), max_retries=2)
+            reply = _retry(
+                lambda: ask_nemotron_ultra(
+                    user_message, [], reasoning_budget=_effort_budget
+                ),
+                max_retries=2,
+            )
             if has_pending_safe():
                 with _pending_lock:
                     pending_tool = _pending_safe.get("tool", "that")

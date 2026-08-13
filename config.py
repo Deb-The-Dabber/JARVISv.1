@@ -131,7 +131,7 @@ FACE_SIMILARITY_THRESHOLD = 0.85  # cosine similarity threshold for match
 # Gmail OAuth (Google Cloud Console → Credentials → OAuth 2.0 Client ID)
 GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID", "")
 GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET", "")
-GMAIL_REDIRECT_URI = os.getenv("GMAIL_REDIRECT_URI", "http://localhost:8000/oauth/callback/gmail")
+GMAIL_REDIRECT_URI = os.getenv("GMAIL_REDIRECT_URI", "http://localhost:8002/oauth/callback/gmail")
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
@@ -143,15 +143,15 @@ GMAIL_SCOPES = [
 # GitHub OAuth (GitHub Settings → Developer Settings → OAuth Apps)
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
-GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8000/oauth/callback/github")
+GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8002/oauth/callback/github")
 GITHUB_SCOPES = ["repo", "read:user", "read:org", "user:email"]
 
-OAUTH_REDIRECT_BASE = os.getenv("OAUTH_REDIRECT_BASE", "http://localhost:8000")
+OAUTH_REDIRECT_BASE = os.getenv("OAUTH_REDIRECT_BASE", "http://localhost:8002")
 
 # Google Drive OAuth (.env: DRIVE_CLIENT_ID / DRIVE_CLIENT_SECRET)
 GOOGLE_DRIVE_CLIENT_ID = os.getenv("DRIVE_CLIENT_ID", os.getenv("GOOGLE_DRIVE_CLIENT_ID", ""))
 GOOGLE_DRIVE_CLIENT_SECRET = os.getenv("DRIVE_CLIENT_SECRET", os.getenv("GOOGLE_DRIVE_CLIENT_SECRET", ""))
-GOOGLE_DRIVE_REDIRECT_URI = os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-drive")
+GOOGLE_DRIVE_REDIRECT_URI = os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-drive")
 GOOGLE_DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/drive.file",
@@ -162,7 +162,7 @@ GOOGLE_DRIVE_SCOPES = [
 # Google Sheets OAuth (.env: SHEETS_CLIENT_ID / SHEETS_CLIENT_SECRET)
 GOOGLE_SHEETS_CLIENT_ID = os.getenv("SHEETS_CLIENT_ID", os.getenv("GOOGLE_SHEETS_CLIENT_ID", ""))
 GOOGLE_SHEETS_CLIENT_SECRET = os.getenv("SHEETS_CLIENT_SECRET", os.getenv("GOOGLE_SHEETS_CLIENT_SECRET", ""))
-GOOGLE_SHEETS_REDIRECT_URI = os.getenv("GOOGLE_SHEETS_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-sheets")
+GOOGLE_SHEETS_REDIRECT_URI = os.getenv("GOOGLE_SHEETS_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-sheets")
 GOOGLE_SHEETS_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -173,7 +173,7 @@ GOOGLE_SHEETS_SCOPES = [
 # Google Docs OAuth (.env: DOCS_CLIENT_ID / DOCS_CLIENT_SECRET)
 GOOGLE_DOCS_CLIENT_ID = os.getenv("DOCS_CLIENT_ID", os.getenv("GOOGLE_DOCS_CLIENT_ID", ""))
 GOOGLE_DOCS_CLIENT_SECRET = os.getenv("DOCS_CLIENT_SECRET", os.getenv("GOOGLE_DOCS_CLIENT_SECRET", ""))
-GOOGLE_DOCS_REDIRECT_URI = os.getenv("GOOGLE_DOCS_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-docs")
+GOOGLE_DOCS_REDIRECT_URI = os.getenv("GOOGLE_DOCS_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-docs")
 GOOGLE_DOCS_SCOPES = [
     "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/documents.readonly",
@@ -184,7 +184,7 @@ GOOGLE_DOCS_SCOPES = [
 # Google Slides OAuth (.env: SLIDES_CLIENT_ID / SLIDES_CLIENT_SECRET)
 GOOGLE_SLIDES_CLIENT_ID = os.getenv("SLIDES_CLIENT_ID", os.getenv("GOOGLE_SLIDES_CLIENT_ID", ""))
 GOOGLE_SLIDES_CLIENT_SECRET = os.getenv("SLIDES_CLIENT_SECRET", os.getenv("GOOGLE_SLIDES_CLIENT_SECRET", ""))
-GOOGLE_SLIDES_REDIRECT_URI = os.getenv("GOOGLE_SLIDES_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-slides")
+GOOGLE_SLIDES_REDIRECT_URI = os.getenv("GOOGLE_SLIDES_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-slides")
 GOOGLE_SLIDES_SCOPES = [
     "https://www.googleapis.com/auth/presentations",
     "https://www.googleapis.com/auth/presentations.readonly",
@@ -195,7 +195,7 @@ GOOGLE_SLIDES_SCOPES = [
 # Google Forms OAuth (.env: FORMS_CLIENT_ID / FORMS_CLIENT_SECRET)
 GOOGLE_FORMS_CLIENT_ID = os.getenv("FORMS_CLIENT_ID", os.getenv("GOOGLE_FORMS_CLIENT_ID", ""))
 GOOGLE_FORMS_CLIENT_SECRET = os.getenv("FORMS_CLIENT_SECRET", os.getenv("GOOGLE_FORMS_CLIENT_SECRET", ""))
-GOOGLE_FORMS_REDIRECT_URI = os.getenv("GOOGLE_FORMS_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-forms")
+GOOGLE_FORMS_REDIRECT_URI = os.getenv("GOOGLE_FORMS_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-forms")
 GOOGLE_FORMS_SCOPES = [
     "https://www.googleapis.com/auth/forms.body",
     "https://www.googleapis.com/auth/forms.body.readonly",

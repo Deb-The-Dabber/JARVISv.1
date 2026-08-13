@@ -4,7 +4,7 @@ Jarvis does **not** run on the phone. The phone is a remote control: talk/type �
 
 You already have everything needed in this repo:
 
-- `server.py` — FastAPI on port **8000**
+- `server.py` — FastAPI on port **8002**
 - `static/index.html` — mobile web UI (text + microphone)
 
 Tailscale connects your phone to your Mac over a private VPN, so you do **not** need to be on the same Wi‑Fi.
@@ -53,8 +53,8 @@ python server.py
 
 You should see:
 
-- `http://localhost:8000` — on the Mac only  
-- `http://100.x.x.x:8000` — **use this on your phone** (Tailscale IP)
+- `http://localhost:8002` — on the Mac only  
+- `http://100.x.x.x:8002` — **use this on your phone** (Tailscale IP)
 
 Keep this terminal open. Jarvis only works while the server is running.
 
@@ -69,7 +69,7 @@ caffeinate -dims python server.py
 ## 4. Open Jarvis on your phone
 
 1. Tailscale **on** on the phone  
-2. Safari (or Chrome) → `http://100.x.x.x:8000` (your Mac’s Tailscale IP)  
+2. Safari (or Chrome) → `http://100.x.x.x:8002` (your Mac’s Tailscale IP)  
 3. **Add to Home Screen** (Share → Add to Home Screen) for an app-like icon  
 
 Use the mic button for voice (`/ask-voice`) or type in the chat box (`/ask`).
@@ -100,7 +100,7 @@ Use the mic button for voice (`/ask-voice`) or type in the chat box (`/ask`).
 - Tailscale on **both** devices?  
 - Same Tailscale account?  
 - Mac server running? (`python server.py`)  
-- Try `http://100.x.x.x:8000/health` — should show JSON `{"status":"online",...}`  
+- Try `http://100.x.x.x:8002/health` — should show JSON `{"status":"online",...}`  
 
 ### Works on Wi‑Fi but not on cellular
 
@@ -120,7 +120,7 @@ On the Mac: **System Settings → Privacy & Security → Accessibility** → ena
 ## Security
 
 - Tailscale is a **private** network; only your devices see the Mac IP.  
-- Do **not** port-forward 8000 to the public internet without adding auth.  
+- Do **not** port-forward 8002 to the public internet without adding auth.  
 - Optional later: set `JARVIS_API_TOKEN` in `.env` (if you add token checks to `server.py`).
 
 ---
@@ -135,5 +135,5 @@ tailscale ip -4
 cd ~/Jarvis && source venv/bin/activate && python server.py
 
 # Phone browser
-http://<tailscale-ip>:8000
+http://<tailscale-ip>:8002
 ```

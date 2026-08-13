@@ -29,6 +29,7 @@ PROVIDER_PROFILES: dict[str, dict[str, float | tuple[float, float]]] = {
         "reasoning": 0.95,
         "tool_use": 0.98,
         "chat": 0.90,
+        "chat_fast": 0.40,
         "base_latency_ms": 1500,
         "price": (2.00, 8.00),
     },
@@ -37,6 +38,7 @@ PROVIDER_PROFILES: dict[str, dict[str, float | tuple[float, float]]] = {
         "reasoning": 0.90,
         "tool_use": 0.96,
         "chat": 0.95,
+        "chat_fast": 0.72,
         "base_latency_ms": 900,
         "price": (0.15, 0.60),
     },
@@ -45,6 +47,7 @@ PROVIDER_PROFILES: dict[str, dict[str, float | tuple[float, float]]] = {
         "reasoning": 0.82,
         "tool_use": 0.90,
         "chat": 0.95,
+        "chat_fast": 0.98,
         "base_latency_ms": 350,
         "price": (0.80, 0.80),
     },
@@ -53,6 +56,7 @@ PROVIDER_PROFILES: dict[str, dict[str, float | tuple[float, float]]] = {
         "reasoning": 0.84,
         "tool_use": 0.88,
         "chat": 0.90,
+        "chat_fast": 0.62,
         "base_latency_ms": 700,
         "price": (1.50, 6.00),
     },
@@ -61,6 +65,7 @@ PROVIDER_PROFILES: dict[str, dict[str, float | tuple[float, float]]] = {
         "reasoning": 0.94,
         "tool_use": 0.92,
         "chat": 0.88,
+        "chat_fast": 0.50,
         "base_latency_ms": 2000,
         "price": (1.60, 7.00),
     },
@@ -69,6 +74,7 @@ PROVIDER_PROFILES: dict[str, dict[str, float | tuple[float, float]]] = {
         "reasoning": 0.89,
         "tool_use": 0.80,
         "chat": 0.84,
+        "chat_fast": 0.55,
         "base_latency_ms": 4000,
         "price": (0.50, 0.50),
     },
@@ -77,6 +83,7 @@ PROVIDER_PROFILES: dict[str, dict[str, float | tuple[float, float]]] = {
         "reasoning": 0.65,
         "tool_use": 0.55,
         "chat": 0.80,
+        "chat_fast": 0.40,
         "base_latency_ms": 5000,
         "price": (0.0, 0.0),
     },
@@ -85,6 +92,7 @@ PROVIDER_PROFILES: dict[str, dict[str, float | tuple[float, float]]] = {
         "reasoning": 0.40,
         "tool_use": 0.30,
         "chat": 0.75,
+        "chat_fast": 0.75,
         "base_latency_ms": 200,
         "price": (0.0, 0.0),
     },
@@ -98,6 +106,8 @@ _INTENT_DIMS: dict[str, list[tuple[str, float]]] = {
     "automation": [("tool_use", 1.0), ("reasoning", 0.4), ("coding", 0.3)],
     "self_mod": [("coding", 0.9), ("tool_use", 0.6), ("reasoning", 0.4)],
     "chat": [("reasoning", 0.7), ("tool_use", 0.5), ("chat", 0.4)],
+    # Low-effort chat: fast conversational replies are the whole point.
+    "chat_fast": [("chat_fast", 1.0), ("chat", 0.3)],
 }
 
 # Scoring weights (named, no magic in the code path).
@@ -110,9 +120,12 @@ W_HEALTH = 0.1
 HEALTH_MIN = 30.0
 
 # Latency bands (ms) -> factor; unknown latency is not penalized.
+# Sub-second resolution lets low-effort routing tell 350ms chat from 900ms chat.
 _LATENCY_BANDS = [
-    (1000, 1.00),
-    (3000, 0.97),
+    (300, 1.00),
+    (600, 0.99),
+    (1000, 0.97),
+    (3000, 0.94),
     (8000, 0.90),
     (20000, 0.80),
     (float("inf"), 0.70),
@@ -174,6 +187,7 @@ def score_candidates(
     intent: str,
     candidates: list[dict[str, Any]],
     budget_warning: bool = False,
+    weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     """Score candidates against an intent. Returns INVALID-first-free list.
 
@@ -181,10 +195,20 @@ def score_candidates(
       provider (str), health (float, default 100), latency_ms (float|None),
       available (bool, default True), price (tuple|None override)
 
+    ``weights`` optionally overrides the global W_* scoring weights
+    (e.g. latency-policy effort tiers). None = global defaults.
+
     Returns ordered list of dicts: {provider, score, components, status}
     where status is "eligible" or "INVALID" (with reason). INVALID entries
     keep their health/availability facts for telemetry but carry no score.
     """
+    if weights:
+        w_capability = weights.get("capability", W_CAPABILITY)
+        w_latency = weights.get("latency", W_LATENCY)
+        w_cost = weights.get("cost", W_COST)
+        w_health = weights.get("health", W_HEALTH)
+    else:
+        w_capability, w_latency, w_cost, w_health = W_CAPABILITY, W_LATENCY, W_COST, W_HEALTH
     scored: list[dict[str, Any]] = []
     for cand in candidates:
         name = cand["provider"]
@@ -212,7 +236,9 @@ def score_candidates(
         if budget_warning and price and price[0] + price[1] > 0:
             cost *= _COST_PENALTY_FACTOR
 
-        score = W_CAPABILITY * fit + W_LATENCY * lat + W_COST * cost + W_HEALTH * health_f
+        score = (
+            w_capability * fit + w_latency * lat + w_cost * cost + w_health * health_f
+        )
         scored.append(
             _entry(
                 name,
