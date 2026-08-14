@@ -17,7 +17,8 @@ class TestSystemTools:
         assert r.status_code == 200
         data = r.json()
         assert "°F" in data["reply"] or "°C" in data["reply"]
-        assert "humidity" in data["reply"].lower()
+        # "humid" is a strict substring of "humidity" — tolerate LLM phrasing
+        assert "humid" in data["reply"].lower()
         assert_no_raw_json(data["reply"])
 
     def test_web_search(self, api):

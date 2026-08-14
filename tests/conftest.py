@@ -22,8 +22,10 @@ os.environ.setdefault("JARVIS_LLM_FIRST", "0")
 # brain's import-time thresholds dict matches regardless of collection order.
 os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85")
 os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE_CHAT", "0.80")
-# Embeddings: pin local MiniLM for CI (offline determinism); the NIM
-# nemotron-3-embed-1b path is exercised by scripts/retrieval_eval.py instead.
+# Embeddings: pin local MiniLM for CI/offline determinism. The live memory +
+# RAG indexes are Nemo 2048-dim, but only tests/test_rag.py follows the .env
+# mode (it re-sources JARVIS_EMBEDDING itself before importing rag_memory —
+# see its module header); everything else must stay offline and deterministic.
 os.environ.setdefault("JARVIS_EMBEDDING", "local")
 # Isolate persisted provider health (circuit breaker / backoff) from the real
 # ~/.jarvis/provider_health.json. Without this, a real-world outage (or an
@@ -43,10 +45,15 @@ _TEST_ISOLATION_NS = f"{os.getpid()}_{int(time.time())}"
 
 
 def _free_port(port: int = 8002):
-    """Kill any process listening on the given port."""
+    """Kill any process LISTENING on the given port.
+
+    -sTCP:LISTEN is essential: plain `lsof -ti :port` also matches OWN
+    outbound/TIME_WAIT sockets (e.g. pytest's own requests to the port),
+    which would SIGKILL the test process itself.
+    """
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
+            ["lsof", "-nP", "-iTCP", f":{port}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -133,7 +140,11 @@ def api(jarvis_server):
 
 @pytest.fixture
 def has_display():
-    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or (sys.platform == "darwin" and os.environ.get("TERM_PROGRAM")))
+    return bool(
+        os.environ.get("DISPLAY")
+        or os.environ.get("WAYLAND_DISPLAY")
+        or (sys.platform == "darwin" and os.environ.get("TERM_PROGRAM"))
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -174,7 +185,18 @@ def mock_provider_server():
         env.setdefault(key, "mock-key")
 
     proc = subprocess.Popen(
-        ["python", "-m", "uvicorn", "tests.mock_provider:app", "--host", "127.0.0.1", "--port", str(mock_port), "--log-level", "warning"],
+        [
+            "python",
+            "-m",
+            "uvicorn",
+            "tests.mock_provider:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(mock_port),
+            "--log-level",
+            "warning",
+        ],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -241,6 +263,10 @@ def mock_api(mock_provider_server):
     env["JARVIS_TTS_SILENT"] = "1"
     env["JARVIS_MOCK_PROVIDERS"] = "1"
     env["JARVIS_PORT"] = "8002"
+    # Same port hygiene as jarvis_server: a previous test's server may still
+    # be shutting down (or an unrelated process may hold :8002) — probe it
+    # before spawning, or this test would silently talk to the stale one.
+    _free_port(8002)
     env["JARVIS_PROVIDER_HEALTH_FILE"] = os.path.join(
         tempfile.gettempdir(), f"jarvis_test_health_{_TEST_ISOLATION_NS}_{time.time_ns()}.json"
     )

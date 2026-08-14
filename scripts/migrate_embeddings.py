@@ -9,12 +9,17 @@ verification and fails loudly (exit 1) if any stage fails.
 Usage:
     python scripts/migrate_embeddings.py --mode nemo --yes
     python scripts/migrate_embeddings.py --mode local --dry-run
+    python scripts/migrate_embeddings.py --rag --yes     # RAG index too
 
 The tool sets JARVIS_EMBEDDING for its own process before importing the app
 modules, so it always runs in the requested mode regardless of .env.
 
 On any failure nothing is destroyed until the backup stage has succeeded, and
-the restore command is printed (cp -R <backup>/vector_db ~/jarvis_vector_db).
+the restore command is printed (cp -R <backup>/vector_db <db_path>).
+
+--rag extends the same snapshot-first, failure-stop pipeline to the RAG index
+(~/jarvis_rag_db / rag_docs). In-place re-embed: the exact ID set, documents
+and metadata are preserved; only the embedding model/dimension changes.
 
 --rebuild-from-sources: additive recovery mode (no model change, no delete).
 Reconstructs missing records in the CURRENT index from ~/jarvis_watchlog.db
@@ -38,80 +43,52 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _fail(backup_dir: str | None, msg: str) -> int:
+def _fail(backup_dir: str | None, msg: str, restore_path: str | None = None) -> int:
     print(f"\nMIGRATION FAILED: {msg}")
     if backup_dir:
         print(f"Backup exists at: {backup_dir}")
-        print(f"Restore with:     cp -R {backup_dir}/vector_db {os.path.expanduser('~')}/jarvis_vector_db")
+        print(
+            f"Restore with:     cp -R {backup_dir}/vector_db "
+            f"{restore_path or os.path.expanduser('~') + '/jarvis_vector_db'}"
+        )
     else:
         print("No destructive step ran; the source collection is untouched.")
     return 1
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--mode", choices=["nemo", "local"], default=os.getenv("JARVIS_EMBEDDING", "nemo"))
-    ap.add_argument("--yes", action="store_true", help="skip the interactive confirmation")
-    ap.add_argument(
-        "--force",
-        action="store_true",
-        help="re-migrate even if the stored model matches (recreates collection config)",
-    )
-    ap.add_argument("--dry-run", action="store_true", help="verify preconditions, change nothing")
-    ap.add_argument(
-        "--rebuild-from-sources",
-        action="store_true",
-        help="reconstruct missing records in the CURRENT index from watchlog.db + "
-        "jarvis.jsonl + SQLite (no model change, additive only)",
-    )
-    args = ap.parse_args()
+def _migrate_collection(
+    client,
+    db_path: str,
+    collection_name: str,
+    backup_root: str,
+    target: str,
+    batch_size: int,
+    args,
+    snapshot_prefix: str = "migration",
+) -> int:
+    """The one sanctioned collection migration pipeline: preflight -> export ->
+    immutable snapshot -> re-embed -> recreate -> re-add -> verify, failing
+    loudly with a printed restore command at the first sign of trouble.
 
-    os.environ["JARVIS_EMBEDDING"] = args.mode
-    sys.path.insert(0, str(ROOT))
-
-    import chromadb
-
-    import vector_memory
-    from config import VECTOR_DB_PATH
-    from vector_memory import (
-        COLLECTION_NAME,
-        EMBED_BACKUP_ROOT,
-        EMBEDDING_MODEL_NAME,
-        JARVIS_EMBED_BATCH,
-        JarvisEmbeddingFunction,
-    )
-
-    if args.rebuild_from_sources:
-        return _rebuild(args, vector_memory, VECTOR_DB_PATH, COLLECTION_NAME, EMBED_BACKUP_ROOT, JARVIS_EMBED_BATCH)
-
-    # Reuse vector_memory's own client (a second PersistentClient on the same
-    # path races its background init thread). The collection open may raise a
-    # deferred config conflict — the client itself is still initialized, and
-    # plain get_collection bypasses the embedding-function validation.
-    try:
-        vector_memory._get_collection()
-    except Exception:
-        pass
-    client = vector_memory._client
-    target = EMBEDDING_MODEL_NAME
-    backup_dir = None
+    Shared verbatim by the memory index (default) and the RAG index (--rag).
+    """
+    from vector_memory import JarvisEmbeddingFunction
 
     # ── Stage 1: verify mode/model + source collection ---------------------
     print(f"[1/9] Mode={args.mode}  target model={target}")
-    print(f"      index path: {VECTOR_DB_PATH}")
-    if not os.path.isdir(VECTOR_DB_PATH):
-        return _fail(None, f"index path does not exist: {VECTOR_DB_PATH}")
+    print(f"      index path: {db_path}")
+    if not os.path.isdir(db_path):
+        return _fail(None, f"index path does not exist: {db_path}", db_path)
 
-    client = chromadb.PersistentClient(path=VECTOR_DB_PATH)
     try:
-        col = client.get_collection(name=COLLECTION_NAME)
+        col = client.get_collection(name=collection_name)
     except Exception as e:
-        return _fail(None, f"source collection '{COLLECTION_NAME}' not found: {e}")
+        return _fail(None, f"source collection '{collection_name}' not found: {e}", db_path)
 
     source_count = col.count()
-    print(f"[2/9] Source collection '{COLLECTION_NAME}' exists: {source_count} entries")
+    print(f"[2/9] Source collection '{collection_name}' exists: {source_count} entries")
     if source_count == 0:
-        return _fail(None, "source collection is empty; nothing to migrate")
+        return _fail(None, "source collection is empty; nothing to migrate", db_path)
 
     actual_model = (col.metadata or {}).get("embedding_model", "unknown")
     print(f"[3/9] Stored embedding model: {actual_model}")
@@ -127,18 +104,19 @@ def main() -> int:
         docs = export.get("documents", [])
         metas = export.get("metadatas", [])
     except Exception as e:
-        return _fail(None, f"export failed: {e}")
+        return _fail(None, f"export failed: {e}", db_path)
     if len(ids) != source_count:
-        return _fail(None, f"exported {len(ids)} ids but count() said {source_count} — aborting")
+        return _fail(None, f"exported {len(ids)} ids but count() said {source_count} — aborting", db_path)
     print(f"      exported {len(ids)} entries")
 
     # ── Stage 5: timestamped backup BEFORE any destructive op ---------------
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = os.path.join(EMBED_BACKUP_ROOT, f"migration_{actual_model.replace('/', '_')}_{ts}")
+    dest = os.path.join(backup_root, f"{snapshot_prefix}_{actual_model.replace('/', '_')}_{ts}")
     print(f"[5/9] Backup -> {dest}")
+    backup_dir = None
     try:
         os.makedirs(dest, exist_ok=True)
-        shutil.copytree(VECTOR_DB_PATH, os.path.join(dest, "vector_db"), dirs_exist_ok=True)
+        shutil.copytree(db_path, os.path.join(dest, "vector_db"), dirs_exist_ok=True)
         with open(os.path.join(dest, "snapshot.jsonl"), "w") as fh:
             for i in range(len(ids)):
                 fh.write(
@@ -150,9 +128,9 @@ def main() -> int:
         if os.path.isdir(os.path.join(dest, "vector_db")) and os.path.isfile(os.path.join(dest, "snapshot.jsonl")):
             backup_dir = dest
         else:
-            return _fail(backup_dir, "backup files did not materialize — aborting before any destructive op")
+            return _fail(backup_dir, "backup files did not materialize — aborting before any destructive op", db_path)
     except Exception as e:
-        return _fail(backup_dir, f"backup failed: {e}")
+        return _fail(backup_dir, f"backup failed: {e}", db_path)
 
     if args.dry_run:
         print("\nDRY RUN: preconditions OK, backup verified. No changes made.")
@@ -161,7 +139,7 @@ def main() -> int:
 
     if not args.yes:
         print(
-            f"\nThis will DELETE and RE-CREATE '{COLLECTION_NAME}' ({source_count} entries) "
+            f"\nThis will DELETE and RE-CREATE '{collection_name}' ({source_count} entries) "
             f"re-embedding with '{target}'."
         )
         reply = input("Type 'migrate' to proceed: ").strip().lower()
@@ -170,21 +148,21 @@ def main() -> int:
             return 0
 
     # ── Stage 6: re-embed in batches -----------------------------------------
-    print(f"[6/9] Re-embedding {len(ids)} entries in batches of {JARVIS_EMBED_BATCH}...")
+    print(f"[6/9] Re-embedding {len(ids)} entries in batches of {batch_size}...")
     ef = JarvisEmbeddingFunction()
     embeddings = []
     t0 = time.time()
     try:
-        for start in range(0, len(ids), JARVIS_EMBED_BATCH):
-            chunk = [d for d in docs[start : start + JARVIS_EMBED_BATCH]]
+        for start in range(0, len(ids), batch_size):
+            chunk = [d for d in docs[start : start + batch_size]]
             vecs = ef(chunk)
             embeddings.extend(vecs)
-            done = min(start + JARVIS_EMBED_BATCH, len(ids))
+            done = min(start + batch_size, len(ids))
             print(f"      {done}/{len(ids)}  ({time.time() - t0:.1f}s)")
     except Exception as e:
-        return _fail(backup_dir, f"re-embedding failed at batch: {e}")
+        return _fail(backup_dir, f"re-embedding failed at batch: {e}", db_path)
     if len(embeddings) != len(ids):
-        return _fail(backup_dir, f"embedded {len(embeddings)} vectors for {len(ids)} entries")
+        return _fail(backup_dir, f"embedded {len(embeddings)} vectors for {len(ids)} entries", db_path)
 
     # ── Stage 7: recreate collection ----------------------------------------
     # The new collection must be created WITH the app's JarvisEmbeddingFunction
@@ -193,26 +171,26 @@ def main() -> int:
     # then raises an embedding-function conflict on every open.
     print("[7/9] Recreating collection...")
     try:
-        client.delete_collection(name=COLLECTION_NAME)
+        client.delete_collection(name=collection_name)
         client.create_collection(
-            name=COLLECTION_NAME,
+            name=collection_name,
             metadata={"hnsw:space": "cosine", "embedding_model": target},
             embedding_function=ef,
         )
-        col = client.get_collection(name=COLLECTION_NAME)
+        col = client.get_collection(name=collection_name)
     except Exception as e:
-        return _fail(backup_dir, f"recreate failed: {e}")
+        return _fail(backup_dir, f"recreate failed: {e}", db_path)
 
     try:
-        for start in range(0, len(ids), JARVIS_EMBED_BATCH):
+        for start in range(0, len(ids), batch_size):
             col.add(
-                ids=ids[start : start + JARVIS_EMBED_BATCH],
-                documents=docs[start : start + JARVIS_EMBED_BATCH],
-                metadatas=metas[start : start + JARVIS_EMBED_BATCH],
-                embeddings=embeddings[start : start + JARVIS_EMBED_BATCH],
+                ids=ids[start : start + batch_size],
+                documents=docs[start : start + batch_size],
+                metadatas=metas[start : start + batch_size],
+                embeddings=embeddings[start : start + batch_size],
             )
     except Exception as e:
-        return _fail(backup_dir, f"re-add failed: {e}")
+        return _fail(backup_dir, f"re-add failed: {e}", db_path)
 
     # ── Stage 8: verify -------------------------------------------------------
     print("[8/9] Verifying...")
@@ -220,23 +198,23 @@ def main() -> int:
         new_count = col.count()
         got_ids = set(col.get(include=[])["ids"])
     except Exception as e:
-        return _fail(backup_dir, f"post-migration verification failed: {e}")
+        return _fail(backup_dir, f"post-migration verification failed: {e}", db_path)
 
     if new_count != source_count:
-        return _fail(backup_dir, f"count mismatch: source {source_count}, new {new_count}")
+        return _fail(backup_dir, f"count mismatch: source {source_count}, new {new_count}", db_path)
     if got_ids != set(ids):
         missing = len(set(ids) - got_ids)
         extra = len(got_ids - set(ids))
-        return _fail(backup_dir, f"id set mismatch: missing {missing}, extra {extra}")
+        return _fail(backup_dir, f"id set mismatch: missing {missing}, extra {extra}", db_path)
 
     try:
         sample = col.get(limit=1, include=["embeddings"])
         new_dim = len(sample["embeddings"][0])
         expected_dim = len(ef(["dimension check"])[0])
     except Exception as e:
-        return _fail(backup_dir, f"dimension verification failed: {e}")
+        return _fail(backup_dir, f"dimension verification failed: {e}", db_path)
     if new_dim != expected_dim:
-        return _fail(backup_dir, f"dimension mismatch: stored {new_dim}, expected {expected_dim}")
+        return _fail(backup_dir, f"dimension mismatch: stored {new_dim}, expected {expected_dim}", db_path)
 
     # ── Stage 9: report --------------------------------------------------------
     print("[9/9] DONE.")
@@ -246,6 +224,95 @@ def main() -> int:
     print("Next steps: restart the server with the matching JARVIS_EMBEDDING,")
     print("            then run scripts/retrieval_eval.py to compare retrieval quality.")
     return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--mode", choices=["nemo", "local"], default=os.getenv("JARVIS_EMBEDDING", "nemo"))
+    ap.add_argument("--yes", action="store_true", help="skip the interactive confirmation")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="re-migrate even if the stored model matches (recreates collection config)",
+    )
+    ap.add_argument("--dry-run", action="store_true", help="verify preconditions, change nothing")
+    ap.add_argument("--rag", action="store_true", help="migrate the RAG index (~/jarvis_rag_db / rag_docs)")
+    ap.add_argument(
+        "--rebuild-from-sources",
+        action="store_true",
+        help="reconstruct missing records in the CURRENT index from watchlog.db + "
+        "jarvis.jsonl + SQLite (no model change, additive only)",
+    )
+    args = ap.parse_args()
+
+    os.environ["JARVIS_EMBEDDING"] = args.mode
+    sys.path.insert(0, str(ROOT))
+
+    import chromadb
+
+    if args.rag:
+        # RAG has no background init thread and nothing else opens this path
+        # while the server is stopped — a standalone client is race-free here.
+        from rag_memory import DEFAULT_COLLECTION as RAG_COLLECTION_NAME
+        from rag_memory import RAG_DB_PATH
+
+        if args.rebuild_from_sources:
+            print("ERROR: --rebuild-from-sources applies to the memory index only (--rag is not supported).")
+            return 1
+        from vector_memory import (
+            EMBED_BACKUP_ROOT,
+            EMBEDDING_MODEL_NAME,
+            JARVIS_EMBED_BATCH,
+        )
+
+        print(f"Target: RAG index {RAG_DB_PATH} / '{RAG_COLLECTION_NAME}'")
+        if not os.path.isdir(RAG_DB_PATH):
+            return _fail(None, f"RAG index path does not exist: {RAG_DB_PATH}", RAG_DB_PATH)
+        client = chromadb.PersistentClient(path=RAG_DB_PATH)
+        return _migrate_collection(
+            client,
+            RAG_DB_PATH,
+            RAG_COLLECTION_NAME,
+            EMBED_BACKUP_ROOT,
+            EMBEDDING_MODEL_NAME,
+            JARVIS_EMBED_BATCH,
+            args,
+            snapshot_prefix="rag",
+        )
+
+    import vector_memory
+    from config import VECTOR_DB_PATH
+    from vector_memory import (
+        COLLECTION_NAME,
+        EMBED_BACKUP_ROOT,
+        EMBEDDING_MODEL_NAME,
+        JARVIS_EMBED_BATCH,
+    )
+
+    if args.rebuild_from_sources:
+        return _rebuild(args, vector_memory, VECTOR_DB_PATH, COLLECTION_NAME, EMBED_BACKUP_ROOT, JARVIS_EMBED_BATCH)
+
+    # Reuse vector_memory's own client (a second PersistentClient on the same
+    # path races its background init thread). The collection open may raise a
+    # deferred config conflict — the client itself is still initialized, and
+    # plain get_collection bypasses the embedding-function validation.
+    try:
+        vector_memory._get_collection()
+    except Exception:
+        pass
+    client = vector_memory._client
+    target = EMBEDDING_MODEL_NAME
+
+    return _migrate_collection(
+        client,
+        VECTOR_DB_PATH,
+        COLLECTION_NAME,
+        EMBED_BACKUP_ROOT,
+        target,
+        JARVIS_EMBED_BATCH,
+        args,
+        snapshot_prefix="migration",
+    )
 
 
 VECTORIZED_EVENTS = {

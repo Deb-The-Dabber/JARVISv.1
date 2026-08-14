@@ -1,10 +1,22 @@
 import os
 import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
+from dotenv import dotenv_values
 
-from rag_memory import (
+# The rag tests read/write the REAL ~/jarvis_rag_db, which is a Nemo 2048-dim
+# index. conftest pins local for offline determinism, so re-source the repo
+# .env's embedding mode here — BEFORE rag_memory (and its embedder) is
+# imported — so the embedder matches the live collection. No .env (CI) keeps
+# the local fallback. dotenv_values leaves os.environ untouched, so the other
+# conftest freezes stay intact.
+_env_file = Path(__file__).resolve().parents[1] / ".env"
+_env = dotenv_values(_env_file) if _env_file.exists() else {}
+os.environ["JARVIS_EMBEDDING"] = _env.get("JARVIS_EMBEDDING") or os.getenv("JARVIS_EMBEDDING") or "local"
+
+from rag_memory import (  # noqa: E402
     _bm25_search,
     _chunk_text,
     _format_citations,
