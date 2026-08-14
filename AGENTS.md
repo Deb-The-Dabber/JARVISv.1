@@ -80,7 +80,8 @@ Constants in `config.py` (user info, paths, TTLs, models).
 | `terminal.py` | Commands: `backup`, `backups`, `health`, `selfmod log`, `memory prune [days]`.
 | `server.py` | `/health` now includes dependency check results.
 | `safety.py` | Tool confirmation/blocking: `SAFE` (auto), `WARNING` (confirm), `DANGEROUS` (confirm), `BLOCKED` (deny) |
-| `vector_memory.py` | ChromaDB with embedding model migration (export/re-embed on dimension change) |
+| `vector_memory.py` | ChromaDB memory index; remote embeddings via NIM `nemotron-3-embed-1b` (2048-dim) by default, `JARVIS_EMBEDDING=local` for offline/CI (MiniLM 384-dim; repo `.env` pins `local`). Single persistent `httpx.Client` shared for all embed calls (never per-request — ENOBUFS guard), batch `JARVIS_EMBED_BATCH` (64), truncate `JARVIS_EMBED_MAX_CHARS` (6000), in-memory LRU for repeats, `get_embedding()` alias for perf_router. **Embedding migration is EXPLICIT-ONLY**: importing vector_memory never deletes/recreates/migrates a collection (background init opens/reads/checks; any model/dimension mismatch is logged as deferred to `~/.jarvis/embeddings_backup/deferred_migration.log`); run `python scripts/migrate_embeddings.py --mode nemo|local --yes` for the verified foreground sequence (verify source → timestamped backup+`snapshot.jsonl` → export → recreate → batched re-embed → count/id/dimension verification, exit 1 with restore command on any failure). Benchmark: `scripts/retrieval_eval.py` (`--mode local|nemo` then `--compare`) |
+| `scripts/migrate_embeddings.py` | **Only** sanctioned embedding migration for the memory index. Foreground-only — never invoked by imports, background threads, or smoke tests. Stages: verify mode/model → verify source exists + count → export ids/docs/metas → **timestamped backup before any destructive op** → recreate → batched re-embed → verify count/id-set/dimensions → print backup path. `--dry-run` checks preconditions, `--yes` skips confirmation; exits 1 with restore command on any failure. `--rebuild-from-sources` mode (additive, local mode only): reconstructs lost rows in the CURRENT index from `~/jarvis_watchlog.db` (only proactive-vectorized event signatures), `~/.jarvis/logs/jarvis.jsonl` (non-error requests between index epoch 2026-08-07 and the incident cutoff), and SQLite as authority — snapshots first, dedupes by id + base-window content match, ends with full statistics |
 | `file_sandbox.py` | File-write sandbox: stages create/write/append as diffs, approval before apply |
 | `action_sandbox.py` | Universal action sandbox: previews (sandboxed run / intent), self-mod review, typed confirm |
 | `eval_runner.py` | Eval harness: runs golden set through brain, measures intent/tool/keyword accuracy |
@@ -150,7 +151,7 @@ NIM slots replace the legacy Tier 5/6 lists (Llama 4 Maverick, MiniMax M2.7, Qwe
 |-------|-----|------------|
 | `Error querying device -1` | No default mic | `terminal.py` auto-picks first working input |
 | ElevenLabs quota | Free tier exhausted | Prints once/session, falls back to Edge-TTS → `say` |
-| ChromaDB dimension error | Embedding model changed | Auto-migrates: export → recreate → re-embed |
+| ChromaDB dimension error | Embedding model changed | Deferred by design — imports never migrate. Run `python scripts/migrate_embeddings.py --mode nemo --yes` explicitly (backup in `~/.jarvis/embeddings_backup/` for rollback) |
 | Wake word unresponsive | Mic permission lost | Check System Settings → Privacy → Microphone |
 | Any 503 on Gemini | `GOOGLE_API_KEY` set to non-Google key | Delete it from `.env` — keep only `GOOGLE_GENAI_API_KEY` |
 | Stale :8002 process | Previous server didn't shut down cleanly | `_free_port()` in conftest.py kills it automatically |

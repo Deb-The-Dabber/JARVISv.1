@@ -273,11 +273,9 @@ def _get_collection(collection_name: str = DEFAULT_COLLECTION):
                     if len(stored[0]) != expected_dim:
                         print(
                             f"  RAG collection dimension mismatch "
-                            f"({len(stored[0])} -> {expected_dim}), recreating collection."
+                            f"({len(stored[0])} -> {expected_dim}), migration deferred."
                         )
-                        _client.delete_collection(name=collection_name)
-                        collection = None
-                        _bm25_dirty = True
+                        print("  Re-embed rag_docs explicitly before switching embedding modes.")
             except Exception:
                 pass
         if collection is None:
@@ -407,7 +405,10 @@ def search_rag(query: str, n_results: int = 5) -> str:
     try:
         collection = _get_collection(DEFAULT_COLLECTION)
         if collection.count() == 0:
-            return f"No documents indexed. RAG_FOLDER is '{DEFAULT_FOLDER}'. Add files there or run '/ingest <path>' to index."
+            return (
+                "No documents indexed. RAG_FOLDER is "
+                f"'{DEFAULT_FOLDER}'. Add files there or run '/ingest <path>' to index."
+            )
 
         vector_results = _vector_search(query, n=n_results * 4)
         bm25_results = _bm25_search(query, n=n_results * 4)

@@ -22,6 +22,9 @@ os.environ.setdefault("JARVIS_LLM_FIRST", "0")
 # brain's import-time thresholds dict matches regardless of collection order.
 os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85")
 os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE_CHAT", "0.80")
+# Embeddings: pin local MiniLM for CI (offline determinism); the NIM
+# nemotron-3-embed-1b path is exercised by scripts/retrieval_eval.py instead.
+os.environ.setdefault("JARVIS_EMBEDDING", "local")
 # Isolate persisted provider health (circuit breaker / backoff) from the real
 # ~/.jarvis/provider_health.json. Without this, a real-world outage (or an
 # earlier failing test run) leaves circuits open that make provider-fallback

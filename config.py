@@ -10,6 +10,10 @@ JARVIS_TTS_SILENT = os.getenv("JARVIS_TTS_SILENT", "0") == "1"
 JARVIS_FORCE_PROVIDER = os.getenv("JARVIS_FORCE_PROVIDER", "").lower()
 JARVIS_MOCK_PROVIDERS = os.getenv("JARVIS_MOCK_PROVIDERS", "0") == "1"
 
+JARVIS_EMBEDDING = os.getenv("JARVIS_EMBEDDING", "nemo").lower().strip()
+JARVIS_EMBED_BATCH = int(os.getenv("JARVIS_EMBED_BATCH", "64"))
+JARVIS_EMBED_MAX_CHARS = int(os.getenv("JARVIS_EMBED_MAX_CHARS", "6000"))
+
 USER_NAME = "Debasish"
 USER_CITY = "Aurora"
 USER_LAT = 41.7606
