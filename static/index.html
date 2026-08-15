@@ -1045,7 +1045,24 @@
 
       ws.onopen = () => {
         // WebSocket connected, start recording
-        mediaRecorder = new MediaRecorder(micStream, { mimeType: "audio/webm;codecs=opus" });
+        // Safari doesn't support WebM/Opus — pick the first codec this browser supports.
+        const SUPPORTED_MIMES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4;codecs=mp4a.40.2", "audio/mp4"];
+        let recorderOptions;
+        if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported) {
+          const chosen = SUPPORTED_MIMES.find((m) => MediaRecorder.isTypeSupported(m));
+          if (chosen) recorderOptions = { mimeType: chosen };
+        }
+        try {
+          mediaRecorder = new MediaRecorder(micStream, recorderOptions);
+        } catch (recErr) {
+          addActivity(`Recorder not supported (${recErr.name || "unknown"})`, "error");
+          micStream.getTracks().forEach((t) => t.stop());
+          micStream = null;
+          isRecording = false;
+          document.getElementById("micBtn").textContent = "MIC";
+          document.getElementById("micBtn").classList.remove("active");
+          return;
+        }
         mediaRecorder.ondataavailable = e => {
           if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
             e.data.arrayBuffer().then(buf => ws.send(buf));
@@ -1108,7 +1125,21 @@
       };
 
     } catch(e) {
-      addActivity("Mic access denied", "error");
+      let micErr = "Mic access denied";
+      const name = (e && e.name) || "";
+      if (name === "NotAllowedError") {
+        micErr = "Mic access denied — allow microphone in Settings → Safari";
+      } else if (name === "NotFoundError") {
+        micErr = "No microphone found on this device";
+      } else if (name === "NotSupportedError") {
+        micErr = "Recording not supported by this browser";
+      } else if (name === "SecurityError") {
+        micErr = "Microphone blocked — page must be served over HTTPS";
+      }
+      if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+        micErr += " — this HTTP page can't access the mic; use the HTTPS Tailscale URL instead";
+      }
+      addActivity(micErr, "error");
     }
   }
 

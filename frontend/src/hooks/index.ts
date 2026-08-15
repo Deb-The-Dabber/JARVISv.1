@@ -156,9 +156,15 @@ export function useAudio() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunksRef.current = [];
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus',
-      });
+      // Safari doesn't support WebM/Opus — pick the first codec this browser supports.
+      const SUPPORTED_MIMES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4'];
+      let recorderOptions;
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+        const chosen = SUPPORTED_MIMES.find((m) => MediaRecorder.isTypeSupported(m));
+        if (chosen) recorderOptions = { mimeType: chosen };
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, recorderOptions);
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
