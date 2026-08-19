@@ -53,7 +53,7 @@ Turns out JARVIS being "dumb" for a while wasn't a model problem, it was infrast
 - Reply truncation bug. Silently cutting off responses and I didn't notice for way too long
 - Keyword short-circuit grabbing requests before they even hit the real classifier
 
-Fixed all four and the ceiling on JARVIS's actual performance is a lot higher than the "dumb" baseline I'd been debugging against for weeks. Kind of annoying in hindsight.
+Fixed all four and the ceiling on JARVIS's actual performance is a lot higher than the "dumb" baseline I'd been debugging against for weeks. Pretty annoying in hindsight.
 
 ## Other stuff that's broken
 
