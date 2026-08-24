@@ -1,0 +1,41 @@
+{
+  "case": {
+    "prompt": "Review this function for bugs and edge cases: it slices a list without any bounds checks.",
+    "expected_intent": "coding",
+    "expected_fine_intent": "review_code",
+    "max_latency": 180
+  },
+  "result": {
+    "prompt": "Review this function for bugs and edge cases: it slices a list without any bounds checks.",
+    "intent": "coding",
+    "expected_intent": "coding",
+    "intent_accuracy": 1.0,
+    "fine_intent": "review_code",
+    "expected_provider_class": "",
+    "final_provider": "local_nn",
+    "provider_class_match": null,
+    "tools_called": [],
+    "tool_accuracy": 1.0,
+    "keyword_recall": 0.0,
+    "intent_latency_ms": 7690.1,
+    "routing_latency_ms": 7892.1,
+    "total_latency_ms": 19901.7,
+    "max_latency_s": 180,
+    "latency_ok": true,
+    "providers_attempted": [],
+    "fallback_count": 0,
+    "cost": {
+      "tokens_input_total": 0,
+      "tokens_output_total": 0,
+      "cost_usd_total": 0.0
+    },
+    "passed": true,
+    "reply_preview": "I'm currently offline, so I can't generate or run code right now. Please try again once the network is back.",
+    "request_id": "655c96cb-a58",
+    "classifier_path": "local_nn",
+    "classifier_confidence": 0.993,
+    "classifier_raw": null,
+    "fine_intent_actual": null,
+    "fine_confidence_actual": 0.0
+  }
+}

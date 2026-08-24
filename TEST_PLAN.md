@@ -43,7 +43,7 @@ python server.py
 ```
 
 Checks:
-- [ ] `http://localhost:8000/health` returns online
+- [ ] `http://localhost:8002/health` returns online
 - [ ] Server boots without import/runtime exceptions
 
 ---
@@ -261,13 +261,13 @@ Forced scenario checks:
 ## 8) API Endpoint Smoke Test (copy/paste)
 
 ```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/system
-curl http://localhost:8000/weather
-curl http://localhost:8000/recap
-curl http://localhost:8000/memories
-curl http://localhost:8000/priorities
-curl http://localhost:8000/audit
+curl http://localhost:8002/health
+curl http://localhost:8002/system
+curl http://localhost:8002/weather
+curl http://localhost:8002/recap
+curl http://localhost:8002/memories
+curl http://localhost:8002/priorities
+curl http://localhost:8002/audit
 ```
 
 Checks:

@@ -10,7 +10,7 @@ source venv/bin/activate
 JARVIS_DEBUG=1 ./run_jarvis.sh  # enable [DEBUG] brain logs (also appends to ~/.jarvis/logs/debug.log)
 
 # Server/API mode (mobile UI via Tailscale)
-python server.py             # listens on :8000
+python server.py             # listens on :8002
 ```
 
 Terminal modes: `m` (manual — press Enter to record or type), `w` (wake word — "Hey Jarvis"), `q` (quit).
@@ -48,7 +48,7 @@ Testing stack: `pytest` + `ruff`. Config in `pyproject.toml` at root.
 - `GOOGLE_GENAI_API_KEY` — Gemini (primary, tool calling)
 - `NVIDIA_API_KEY` — vision/screen analysis
 - `NVIDIA_NEMOTRON_API_KEY` — Nemotron & NIM models
-- `DEEPSEEK_API_KEY` — DeepSeek v4 (via NVIDIA NIM, NVIDIA key format)
+- `DEEPSEEK_API_KEY` — vestigial since Phase 2A (dedicated DeepSeek route removed); kept for `.env` compatibility, no longer read by `brain.py`
 - `GROQ_API_KEY`, `OPENROUTER_API_KEY` — fallback providers
 - `ELEVENLABS_API_KEY` — TTS (free tier → Edge-TTS → macOS `say`; quota warning prints once/session)
 - `EDGE_TTS_VOICE` — Microsoft Edge TTS voice (default: `en-US-JennyNeural`)
@@ -62,9 +62,11 @@ Constants in `config.py` (user info, paths, TTLs, models).
 | File | Role |
 |------|------|
 | `terminal.py` | CLI: voice/text → brain → TTS, wake word loop, proactive engine |
-| `server.py` | FastAPI :8000: `/ask`, `/ask-voice`, `/health`, `/system`, `/weather`, `/recap`, `/memories`, `/priorities`, `/audit`, `/brain/reset`, `/oauth/*`, `/learner/*`, `/inspect` |
+| `server.py` | FastAPI :8002: `/ask`, `/ask-voice`, `/health`, `/system`, `/weather`, `/recap`, `/memories`, `/priorities`, `/audit`, `/brain/reset`, `/oauth/*`, `/learner/*`, `/inspect` |
 | `brain.py` | Provider chain, tool calling, safety gating, tool definitions, intent router, circuit breaker, `_tool_call_names` tracking, `get_last_tool_calls()` |
-| `jarvis_local_nn/` | From-scratch NumPy tiny tensor library + **two-stage intent router**. Stage 1: coarse 6-way router (MiniLM 384-dim → MLP 384→128→6), weights in `weights/intent_router.npz`. Stage 2: one specialist MLP per bucket (same arch → N fine classes, 89 total) in `weights/specialists/<bucket>.npz`, taxonomy in `taxonomy.yaml` (fine classes, tool→intent map, `execution_primitives` excluded from the classifier). Retrain coarse: `python -m jarvis_local_nn.training.train`; specialists: `python -m jarvis_local_nn.training.train_specialist --all`. Eval: `python -m jarvis_local_nn.training.evaluate` (golden set, scores coarse + fine via `expected_fine`). Calibrate: `python -m jarvis_local_nn.training.calibrate` (coarse per-intent gates) and `python -m jarvis_local_nn.training.calibrate_fine --all` (writes `weights/specialists/thresholds.json` per-class gates). Auto-retrain: `jarvis_local_nn/training/auto_retrain.py` — debounced (default 600s) background retrain triggered from `brain._on_tool_learned` when the learner adds a new tool (`JARVIS_AUTO_RETRAIN_ENABLED=0` off, `JARVIS_AUTO_RETRAIN_INTERVAL` window). Toggles: `JARVIS_LOCAL_INTENT_ENABLED=0` (router; independent of the MLX local-chat `JARVIS_LOCAL_ENABLED`); coarse gates: global `JARVIS_LOCAL_INTENT_CONFIDENCE=0.85` + per-intent `JARVIS_LOCAL_INTENT_CONFIDENCE_{CHAT,CODING,TOOL_USE,REASONING,SELF_MOD,AUTOMATION}`; fine gates: `weights/specialists/thresholds.json` + per-class `JARVIS_FINE_CONFIDENCE_<CLASS>` overrides (bucket defaults 0.85/0.90). Embeddings cached in `~/.jarvis/nn_cache/embeddings.npz` (keyed by text hash; incremental retrains embed only new entries). First call per process loads MiniLM (~8s), then 10-70ms/call; reuses vector_memory's embedder. Also acts as last-resort offline provider in `ask_with_tools` (`local_nn` canned reply + locally prefetched tool results). Runtime: `brain.classify_intent` fast-path → coarse bucket → `predict_fine_gated` (per-class gate; below gate the fine label is withheld and routing falls to the LLM) → exposed via `brain.get_last_fine_intent()`, consumed by `_FINE_PREFETCH` (weather_current/sys_info/disk_usage → safe no-arg tool prefetch) |
+| `routing_policy.py` | Optional policy-driven provider selection (Phase 2A): capability/latency/cost/health scoring, hard gates, classifier-output parsing. Wired via `JARVIS_ROUTER_POLICY` / `JARVIS_ROUTER_CHEAP` |
+| `benchmarks/` | Coding-routing benchmark harness (`coding_routing_bench.py`, `compare_bench.py`, `tests/eval/routing_golden.jsonl`, `results/`) |
+| `jarvis_local_nn/` | From-scratch NumPy tiny tensor library + **two-stage intent router**. Stage 1: coarse 6-way router (MiniLM 384-dim → MLP 384→128→6), weights in `weights/intent_router.npz`. Stage 2: one specialist MLP per bucket (same arch → N fine classes, 89 total) in `weights/specialists/<bucket>.npz`, taxonomy in `taxonomy.yaml` (fine classes, tool→intent map, `execution_primitives` excluded from the classifier). Retrain coarse: `python -m jarvis_local_nn.training.train`; specialists: `python -m jarvis_local_nn.training.train_specialist --all`. Eval: `python -m jarvis_local_nn.training.evaluate` (golden set, scores coarse + fine via `expected_fine`). Calibrate: `python -m jarvis_local_nn.training.calibrate` (coarse per-intent gates) and `python -m jarvis_local_nn.training.calibrate_fine --all` (writes `weights/specialists/thresholds.json` per-class gates). Auto-retrain: `jarvis_local_nn/training/auto_retrain.py` — debounced (default 600s) background retrain triggered from `brain._on_tool_learned` when the learner adds a new tool (`JARVIS_AUTO_RETRAIN_ENABLED=0` off, `JARVIS_AUTO_RETRAIN_INTERVAL` window). Toggles: `JARVIS_LOCAL_INTENT_ENABLED=0` (router; independent of the MLX local-chat `JARVIS_LOCAL_ENABLED`); coarse gates: global `JARVIS_LOCAL_INTENT_CONFIDENCE=0.85` + per-intent `JARVIS_LOCAL_INTENT_CONFIDENCE_{CHAT,CODING,TOOL_USE,REASONING,SELF_MOD,AUTOMATION}` (the repo `.env` currently ships 2A-calibrated values — chat 0.59, coding 0.5, tool_use 0.82, reasoning 0.5); fine gates: `weights/specialists/thresholds.json` + per-class `JARVIS_FINE_CONFIDENCE_<CLASS>` overrides (bucket defaults 0.85/0.90); **agreement gate** `JARVIS_LOCAL_AGREEMENT_GATE=1` (2B.2): when the coarse router is confident but the specialist/fine label is withheld, treat as suspicious and escalate to LLM classify — applies to the local_nn AND cheap (Groq) paths. Benchmarking: `benchmarks/classifier_gate_calibrate.py` (offline threshold sweep over the 30-case golden set, no API) and `benchmarks/classifier_gate_bench.py` (A/D/B/C gate configs via fresh-env subprocess replays; results in `benchmarks/results/gate_bench_*`), designed to A/B the same frozen gates against Groq when available |. Embeddings cached in `~/.jarvis/nn_cache/embeddings.npz` (keyed by text hash; incremental retrains embed only new entries). First call per process loads MiniLM (~8s), then 10-70ms/call; reuses vector_memory's embedder. Also acts as last-resort offline provider in `ask_with_tools` (`local_nn` canned reply + locally prefetched tool results). Runtime: `brain.classify_intent` fast-path → coarse bucket → `predict_fine_gated` (per-class gate; below gate the fine label is withheld and routing falls to the LLM) → exposed via `brain.get_last_fine_intent()`, consumed by `_FINE_PREFETCH` (weather_current/sys_info/disk_usage → safe no-arg tool prefetch) |
 | `tools/` | 13+ modules: system, browser, spotify, discord, calendar, file, code, computer, vision, communication, **google_docs**, **google_slides**, **google_forms**, **inspect_tools** |
 | `learner.py` | LLM code-gen learning: `trigger_learning()`, CRUD for learned tools, web API endpoints |
 | `memory.py` | Vector (ChromaDB) + RAG + graph + associative memory |
@@ -78,7 +80,8 @@ Constants in `config.py` (user info, paths, TTLs, models).
 | `terminal.py` | Commands: `backup`, `backups`, `health`, `selfmod log`, `memory prune [days]`.
 | `server.py` | `/health` now includes dependency check results.
 | `safety.py` | Tool confirmation/blocking: `SAFE` (auto), `WARNING` (confirm), `DANGEROUS` (confirm), `BLOCKED` (deny) |
-| `vector_memory.py` | ChromaDB with embedding model migration (export/re-embed on dimension change) |
+| `vector_memory.py` | ChromaDB memory index; remote embeddings via NIM `nemotron-3-embed-1b` (2048-dim) by default, `JARVIS_EMBEDDING=local` for offline/CI (MiniLM 384-dim; repo `.env` pins `local`). Single persistent `httpx.Client` shared for all embed calls (never per-request — ENOBUFS guard), batch `JARVIS_EMBED_BATCH` (64), truncate `JARVIS_EMBED_MAX_CHARS` (6000), in-memory LRU for repeats, `get_embedding()` alias for perf_router. **Embedding migration is EXPLICIT-ONLY**: importing vector_memory never deletes/recreates/migrates a collection (background init opens/reads/checks; any model/dimension mismatch is logged as deferred to `~/.jarvis/embeddings_backup/deferred_migration.log`); run `python scripts/migrate_embeddings.py --mode nemo|local --yes` for the verified foreground sequence (verify source → timestamped backup+`snapshot.jsonl` → export → recreate → batched re-embed → count/id/dimension verification, exit 1 with restore command on any failure). Benchmark: `scripts/retrieval_eval.py` (`--mode local|nemo` then `--compare`) |
+| `scripts/migrate_embeddings.py` | **Only** sanctioned embedding migration for the memory index. Foreground-only — never invoked by imports, background threads, or smoke tests. Stages: verify mode/model → verify source exists + count → export ids/docs/metas → **timestamped backup before any destructive op** → recreate → batched re-embed → verify count/id-set/dimensions → print backup path. `--dry-run` checks preconditions, `--yes` skips confirmation; exits 1 with restore command on any failure. `--rebuild-from-sources` mode (additive, local mode only): reconstructs lost rows in the CURRENT index from `~/jarvis_watchlog.db` (only proactive-vectorized event signatures), `~/.jarvis/logs/jarvis.jsonl` (non-error requests between index epoch 2026-08-07 and the incident cutoff), and SQLite as authority — snapshots first, dedupes by id + base-window content match, ends with full statistics |
 | `file_sandbox.py` | File-write sandbox: stages create/write/append as diffs, approval before apply |
 | `action_sandbox.py` | Universal action sandbox: previews (sandboxed run / intent), self-mod review, typed confirm |
 | `eval_runner.py` | Eval harness: runs golden set through brain, measures intent/tool/keyword accuracy |
@@ -120,20 +123,27 @@ Constants in `config.py` (user info, paths, TTLs, models).
 ## Provider Chain (auto-failover)
 
 ```
-User → Intent Router → Nemotron Ultra (primary) / DeepSeek (coding) → Fallbacks
+User → Intent Router → Nemotron Ultra (primary) → Fallbacks
 ```
 
 | Tier | Provider | Role |
 |------|----------|------|
-| 1 | **Nemotron 3 Ultra** | Primary — tool-first + final response (tool calling + reasoning) |
-| 2 | **DeepSeek v4** | Coding only — routed by intent classifier when code/script/bug keywords detected |
-| 3 | **Gemini 2.5 Flash** | Fallback — excellent tool calling, used when Nemotron unavailable |
-| 4 | **Groq llama-3.3-70b** | Fallback — full tools support via modern `tool_choice` format |
-| 5 | **NVIDIA NIM Tier 5** | Llama 4 Maverick → MiniMax M2.7 (split blast radius) |
-| 6 | **NVIDIA NIM Tier 6** | Qwen 3.5 (397B MoE) → Mistral Large 3 (split blast radius) |
-| 7 | **DeepSeek v4** | Fallback — via NVIDIA NIM |
-| 8 | **OpenRouter deepseek-r1** | Last-resort fallback |
-| 9 | **Pollinations.ai** | No-key emergency fallback |
+| 1 | **Nemotron 3 Ultra** (→ MiniMax M3 understudy) | Primary — tool-first + final response (frontier slot head; in-slot understudy auto-fails over) |
+| 2 | **Gemini 2.5 Flash** | Fallback — excellent tool calling, used when Nemotron unavailable |
+| 3 | **Groq llama-3.3-70b** | Fallback — full tools support via modern `tool_choice` format |
+| 4 | **NIM Fast** | super-49b-v1.5 → nano-30b → step-3.7-flash (low-effort/chat fast path) |
+| 5 | **NIM Coding** | minimax-m3 → gpt-oss-20b → deepseek-v4-flash (coding/agentic) |
+| 6 | **NIM Frontier** (scoring slot) | ultra → minimax-m3 understudy; the probe/low-effort chain's frontier entry |
+| 7 | **OpenRouter deepseek-r1** | Last-resort fallback |
+| 8 | **Pollinations.ai** | No-key emergency fallback |
+
+NIM slots replace the legacy Tier 5/6 lists (Llama 4 Maverick, MiniMax M2.7, Qwen 3.5, Mistral Large 3 — all removed from the build.nvidia.com catalog). `NIM_MODEL_REASONING` (nemotron-3-super-120b-a12b) is **defined but not registered** — the E4 probe (`scripts/nim_probe.py`, `~/.jarvis/nim_probe.jsonl`) gates its activation (<10s median). Vision still uses `nvidia/llama-3.1-nemotron-nano-vl-8b-v1` (working endpoint). Nano-Omni (`nemotron-3-nano-omni-30b-a3b-reasoning`) is the designated replacement — 400/Function-gate with both keys on 2026-08-13; the E4 probe (`scripts/nim_probe.py`) tracks its recovery and the swap flips when it serves 200. All slots are free endpoints under one `NVIDIA_NEMOTRON_API_KEY`.
+
+### Phase 2A routing policy (optional, default off)
+
+- `JARVIS_ROUTER_POLICY=1` — policy-driven provider selection (`routing_policy.py`): scores candidates by capability fit / observed latency / cost / health; hard-gates unavailable or unhealthy (health < 30) providers; fallback chain ordered by score when the primary fails.
+- `JARVIS_ROUTER_CHEAP=1` — fast Groq classify before Nemotron when the user message isn't tool-y, avoiding the expensive Nemotron classify round-trip. Overrides fine-intent labels from the cheap path.
+- Dedicated DeepSeek v4 primary/coding route and NIM DeepSeek tier removed in Phase 2A (bench-verified: intent 19.5s→7.5s avg, routing 86.5s→9.2s avg, stall errors 12→0, intent accuracy -0.09 with cheap classifier on — see `benchmarks/`).
 
 ## Gotchas
 
@@ -141,10 +151,10 @@ User → Intent Router → Nemotron Ultra (primary) / DeepSeek (coding) → Fall
 |-------|-----|------------|
 | `Error querying device -1` | No default mic | `terminal.py` auto-picks first working input |
 | ElevenLabs quota | Free tier exhausted | Prints once/session, falls back to Edge-TTS → `say` |
-| ChromaDB dimension error | Embedding model changed | Auto-migrates: export → recreate → re-embed |
+| ChromaDB dimension error | Embedding model changed | Deferred by design — imports never migrate. Run `python scripts/migrate_embeddings.py --mode nemo --yes` explicitly (backup in `~/.jarvis/embeddings_backup/` for rollback) |
 | Wake word unresponsive | Mic permission lost | Check System Settings → Privacy → Microphone |
 | Any 503 on Gemini | `GOOGLE_API_KEY` set to non-Google key | Delete it from `.env` — keep only `GOOGLE_GENAI_API_KEY` |
-| Stale :8000 process | Previous server didn't shut down cleanly | `_free_port()` in conftest.py kills it automatically |
+| Stale :8002 process | Previous server didn't shut down cleanly | `_free_port()` in conftest.py kills it automatically |
 | Mock provider refused | Port 18889 in use | `_free_port()` kills stale mock server processes |
 
 ## macOS Permissions
@@ -191,7 +201,7 @@ source venv/bin/activate && python terminal.py
 
 API smoke test:
 ```bash
-curl http://localhost:8000/health && echo ""
-curl http://localhost:8000/system && echo ""
+curl http://localhost:8002/health && echo ""
+curl http://localhost:8002/system && echo ""
 ```
 

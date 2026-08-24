@@ -27,6 +27,7 @@ from memory import (
     get_recent_summaries,
     save_memory,
 )
+from decision_log import new_request_id, log_decision
 from tool_parser import (
     detect_and_parse,
     strip_json_tool_calls,
@@ -50,16 +51,28 @@ GEMINI_API_KEY = _env("GOOGLE_GENAI_API_KEY")
 NVIDIA_API_KEY = _env("NVIDIA_API_KEY")
 NVIDIA_NEMOTRON_API_KEY = _env("NVIDIA_NEMOTRON_API_KEY")
 GROQ_API_KEY = _env("GROQ_API_KEY")
+if os.getenv("JARVIS_DISABLE_GROQ", "0") == "1":
+    GROQ_API_KEY = ""
 OPENROUTER_API_KEY = _env("OPENROUTER_API_KEY")
 HUGGINGFACE_TOKEN = _env("HUGGINGFACE_TOKEN")
 
 MOCK_PROVIDER_URL = os.getenv("MOCK_PROVIDER_URL", "http://localhost:8888").rstrip("/")
 JARVIS_MOCK_PROVIDERS = os.getenv("JARVIS_MOCK_PROVIDERS", "0") == "1"
 JARVIS_LLM_FIRST = os.getenv("JARVIS_LLM_FIRST", "1") == "1"
+# Phase 2A routing policy: deterministic capability/health/latency/cost
+# provider selection. Default OFF during dev — flip only after BEFORE/AFTER
+# benchmark shows it winning. JARVIS_ROUTER_CHEAP gates the cheap intent
+# classifier (Groq) used when the local NN is not confident.
+JARVIS_ROUTER_POLICY = os.getenv("JARVIS_ROUTER_POLICY", "0") == "1"
+JARVIS_ROUTER_CHEAP = os.getenv("JARVIS_ROUTER_CHEAP", "0") == "1"
+# Latency policy (vNext): effort-tier routing via latency_policy.py. Pure
+# routing-layer change — the E3/2B classifier and its gates are untouched.
+JARVIS_LATENCY_POLICY = os.getenv("JARVIS_LATENCY_POLICY", "0") == "1"
 JARVIS_LOCAL_ENABLED = os.getenv("JARVIS_LOCAL_ENABLED", "1") == "1"
 JARVIS_EVAL_MODE = os.getenv("JARVIS_EVAL_MODE", "0") == "1"
 JARVIS_LOCAL_INTENT_ENABLED = os.getenv("JARVIS_LOCAL_INTENT_ENABLED", "1") == "1"
 JARVIS_LOCAL_INTENT_CONFIDENCE = float(os.getenv("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85"))
+JARVIS_LOCAL_AGREEMENT_GATE = os.getenv("JARVIS_LOCAL_AGREEMENT_GATE", "0") == "1"
 JARVIS_DAILY_BUDGET_USD = float(os.getenv("JARVIS_DAILY_BUDGET_USD", "0"))
 
 _LOCAL_INTENT_THRESHOLDS = {
@@ -110,11 +123,25 @@ def _daily_budget_exceeded() -> tuple[bool, float, float]:
 
 GEMINI_TOOL_MODEL = "gemini-2.5-flash"
 GEMINI_MODELS = ["gemini-3.5-flash", "gemini-2.5-flash"]
-NIM_MODEL_TIER5 = ["meta/llama-4-maverick-17b-128e-instruct", "minimaxai/minimax-m2.7"]
-NIM_MODEL_TIER6 = ["qwen/qwen3.5-397b-a17b", "mistralai/mistral-large-3-675b-instruct-2512"]
-DEEPSEEK_API_KEY = _env("DEEPSEEK_API_KEY")
-# DeepSeek v4 Flash is EOL (2026-08-07). Commented out fallback.
-DEEPSEEK_MODEL = "deepseek-ai/deepseek-v4-flash"
+# NIM slot ladder (2C): functional slots replace the legacy numeric tiers.
+# All models verified live on build.nvidia.com free endpoints (2026-08-13).
+NIM_MODEL_FAST = [
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+    "nvidia/nemotron-3-nano-30b-a3b",
+    "stepfun-ai/step-3.7-flash",
+]
+NIM_MODEL_CODING = [
+    "minimaxai/minimax-m3",
+    "openai/gpt-oss-20b",
+    "deepseek-ai/deepseek-v4-flash-0731",
+]
+NIM_MODEL_FRONTIER = [
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "minimaxai/minimax-m3",
+]
+# Defined but NOT registered as an active routing slot: the E4 probe must
+# prove reliable (<10s) latency first (2026-08-13 probe: 21.7s for 1 token).
+NIM_MODEL_REASONING = ["nvidia/nemotron-3-super-120b-a12b"]
 GROQ_MODEL = "llama-3.3-70b-versatile"
 # OpenRouter free tier: use a known working free model
 OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct:free"
@@ -141,7 +168,7 @@ def _llm_choose(prompt: str, valid_options: set[str] | None = None, max_retries:
     if JARVIS_MOCK_PROVIDERS:
         return None
     try:
-        resp = _retry(lambda: ask_nemotron_ultra(prompt, []), max_retries=max_retries).strip().lower()
+        resp = _retry(lambda: ask_nemotron_ultra(prompt, [], timeout=45), max_retries=max_retries).strip().lower()
         if not resp:
             return None
         if valid_options is not None and resp not in valid_options:
@@ -151,21 +178,196 @@ def _llm_choose(prompt: str, valid_options: set[str] | None = None, max_retries:
         _debug(f"[LLM‑choose] error: {e}")
         return None
 
-def _select_primary_provider(user_message: str) -> str | None:
-    """LLM‑first selector between Nemotron Ultra and DeepSeek for coding tasks.
-    Returns ``"nemotron_ultra"`` or ``"deepseek"`` (lower‑case) or ``None``.
+def _select_primary_provider(user_message: str, intent: str) -> str | None:
+    """Deterministic primary selection (Phase 2A).
+
+    Policy-on (JARVIS_ROUTER_POLICY=1): top eligible candidate per
+    routing_policy scoring (capability fit x health x latency x cost).
+    Policy-off: coding -> ``"nemotron_ultra"`` (DeepSeek v4 Flash is EOL —
+    no LLM round-trip for arbitration). Returns a profile key or None.
     """
     if not JARVIS_LLM_FIRST:
         return None
-    opts = {"nemotron_ultra", "deepseek"}
-    prompt = (
-        "Given the following user request, decide which primary language model should handle it. "
-        "Options are: 'nemotron_ultra' for NVIDIA Nemotron Ultra, or 'deepseek' for DeepSeek. "
-        "Respond with only the selected option name.\n\n"
-        f"User request: {user_message}\n"
+    if JARVIS_ROUTER_POLICY:
+        try:
+            ordered = _policy_candidate_order(intent)
+            top = ordered[0] if ordered else None
+            if top and top.get("status") == "eligible":
+                return top["provider"]
+            _debug("[Router] policy found no eligible primary")
+            return None
+        except Exception as e:
+            _debug(f"[Router] policy selection failed, defaulting: {e}")
+    return "nemotron_ultra" if intent == "coding" else None
+
+
+# ── Phase 2A routing policy wiring (routing_policy.py holds the pure logic) ──
+# Profile key -> (display name, availability check, ask fn, model label).
+_POLICY_PRIMARY_CALLS: dict[str, tuple[str, object, object, str]] = {
+    "nemotron_ultra": (
+        "Nemotron Ultra",
+        lambda: bool(NVIDIA_NEMOTRON_API_KEY),
+        lambda u: ask_nemotron_ultra(u, [], timeout=90),
+        NEMOTRON_ULTRA_MODEL,
+    ),
+    "gemini": (
+        "Gemini",
+        lambda: _gemini_available(),
+        lambda u: ask_gemini(u),
+        GEMINI_TOOL_MODEL,
+    ),
+    "groq": (
+        "Groq",
+        lambda: bool(GROQ_API_KEY),
+        lambda u: ask_groq(u, []),
+        GROQ_MODEL,
+    ),
+    "nim_fast": (
+        "NIM Fast",
+        lambda: bool(NVIDIA_NEMOTRON_API_KEY),
+        lambda u: ask_nim_fast(u, []),
+        NIM_MODEL_FAST[0],
+    ),
+    "nim_coding": (
+        "NIM Coding",
+        lambda: bool(NVIDIA_NEMOTRON_API_KEY),
+        lambda u: ask_nim_coding(u, []),
+        NIM_MODEL_CODING[0],
+    ),
+    "nim_frontier": (
+        "NIM Frontier",
+        lambda: bool(NVIDIA_NEMOTRON_API_KEY),
+        lambda u: ask_nemotron_ultra(u, [], timeout=90),
+        NIM_MODEL_FRONTIER[0],
+    ),
+    "openrouter": (
+        "OpenRouter",
+        lambda: bool(OPENROUTER_API_KEY),
+        lambda u: ask_openrouter(u, []),
+        OPENROUTER_MODEL,
+    ),
+    "pollinations": (
+        "Pollinations",
+        lambda: True,
+        lambda u: ask_pollinations(u, []),
+        POLLINATIONS_MODEL,
+    ),
+}
+
+_PROVIDER_KEY_BY_DISPLAY = {
+    display: key for key, (display, _, _, _) in _POLICY_PRIMARY_CALLS.items()
+}
+
+
+def _observed_latency_ms(display_name: str) -> float | None:
+    """Rolling avg latency (ms) from provider health, when observed."""
+    try:
+        h = get_provider_health().get(display_name, {})
+        avg = h.get("avg_latency")
+        return round(avg * 1000, 1) if avg else None
+    except Exception:
+        return None
+
+
+def _policy_candidate_order(intent: str) -> list[dict]:
+    """Score live providers for an intent via routing_policy (deterministic).
+
+    Hard eligibility (unavailable / health < 30 -> INVALID) happens inside
+    score_candidates; the result is decision-logged for telemetry (2A.4).
+    """
+    return _candidate_order_scored(intent)
+
+
+def _effort_candidate_order(intent: str, weights: dict, prof: dict) -> list[dict]:
+    """Latency-policy chain: score the fleet with effort-adjusted weights,
+    filtered to providers that fit the task profile's constraints."""
+    return _candidate_order_scored(
+        intent,
+        weights=weights,
+        min_capability=prof.get("capability_floor"),
+        max_latency_ms=prof.get("latency_cap_ms"),
     )
-    choice = _llm_choose(prompt, valid_options=opts)
-    return choice
+
+
+def _candidate_order_scored(
+    intent: str,
+    weights: dict | None = None,
+    min_capability: float | None = None,
+    max_latency_ms: float | None = None,
+) -> list[dict]:
+    """Assemble live candidate facts and score them (deterministic).
+
+    Optional effort filters (latency-policy only):
+      min_capability   drop providers whose capability fit is below this
+      max_latency_ms   drop providers whose base latency exceeds this
+    """
+    from routing_policy import PROVIDER_PROFILES, capability_fit, score_candidates
+
+    health_view = get_provider_health()
+    cands = []
+    for key, (display, available_fn, _fn, _model) in _POLICY_PRIMARY_CALLS.items():
+        profile = PROVIDER_PROFILES.get(key, {})
+        base_lat = profile.get("base_latency_ms")
+        if max_latency_ms is not None and base_lat is not None and base_lat > max_latency_ms:
+            continue
+        if min_capability is not None and capability_fit(intent, profile) < min_capability:
+            continue
+        h = health_view.get(display, {})
+        health = h.get("health_score", 100)
+        latency_ms = _observed_latency_ms(display)
+        if latency_ms is None and base_lat:
+            latency_ms = base_lat
+        try:
+            avail = bool(available_fn()) and not _backoff_active(display)
+        except Exception:
+            avail = False
+        cands.append(
+            {"provider": key, "health": health, "latency_ms": latency_ms, "available": avail}
+        )
+    try:
+        exceeded, spent, budget = _daily_budget_exceeded()
+        budget_warning = bool(budget and budget > 0 and not exceeded and spent / budget > 0.75)
+    except Exception:
+        budget_warning = False
+    ordered = score_candidates(intent, cands, budget_warning=budget_warning, weights=weights)
+    _log_policy_decision(intent, ordered)
+    return ordered
+
+
+def _backoff_active(display_name: str) -> bool:
+    """Backoff/circuit gate only — health threshold is scored by the policy.
+    Returns True when the provider is currently cooling down (skip it)."""
+    if display_name not in _provider_backoff_until:
+        return False
+    return _provider_backoff_until[display_name] > time.time()
+
+
+def _log_policy_decision(intent: str, ordered: list[dict]) -> None:
+    """2A.4: explainable routing telemetry — every candidate + components."""
+    try:
+        log_decision(
+            phase="plan",
+            decision="routing_policy_ordered",
+            decision_source="routing_policy.score_candidates",
+            measurable_inputs={
+                "intent": intent,
+                "policy_on": JARVIS_ROUTER_POLICY,
+                "candidates": [
+                    {
+                        "provider": e["provider"],
+                        "score": e.get("score"),
+                        "status": e["status"],
+                        "reason": e.get("reason"),
+                        **e.get("components", {}),
+                        "observed": e.get("observed", {}),
+                    }
+                    for e in ordered
+                ],
+            },
+        )
+    except Exception as e:
+        _debug(f"[Router] telemetry log failed: {e}")
+
 
 _local_override: str | None = None  # "local" | "cloud" | None (auto)
 
@@ -229,18 +431,33 @@ def _try_local_routing(user_message: str, intent: str | None = None) -> str | No
 
 
 def _classify_error(error_text: str) -> str | None:
-    """LLM‑first error classification. Returns one of a small set of labels or ``None``.
+    """Deterministic error classification from error-text patterns.
+
     Labels: rate_limit, auth_error, timeout, quota, internal, unknown.
+    Replaces the former LLM-first classification call (a full Nemotron
+    round-trip per provider failure) with pattern matching already used
+    elsewhere (see ``_retry`` and ``_ask_nim_loop``).
     """
-    if not JARVIS_LLM_FIRST:
-        return None
-    prompt = (
-        "Classify the following provider error into one of these categories: "
-        "rate_limit, auth_error, timeout, quota, internal, unknown. "
-        "Respond with only the category name.\n\n"
-        f"Error: {error_text}\n"
-    )
-    return _llm_choose(prompt)
+    err = (error_text or "").lower()
+    if not err:
+        return "unknown"
+    if "429" in err or "rate limit" in err or "rate_limit" in err or "too many requests" in err:
+        return "rate_limit"
+    if "401" in err or "403" in err or "unauthorized" in err or "invalid api key" in err:
+        return "auth_error"
+    if "permission denied" in err or "forbidden" in err:
+        return "auth_error"
+    if "timeout" in err or "timed out" in err or "read timeout" in err or "connection" in err:
+        return "timeout"
+    if "connect error" in err or "econnreset" in err or "econnrefused" in err or "socketerror" in err:
+        return "timeout"
+    if "quota" in err or "insufficient_quota" in err or "exceeded your current quota" in err:
+        return "quota"
+    if "500" in err or "502" in err or "503" in err or "504" in err or "unavailable" in err:
+        return "internal"
+    if "overloaded" in err or "internal server error" in err or "server error" in err:
+        return "internal"
+    return "unknown"
 
 def _handle_provider_failure(provider_name: str, exc: Exception) -> None:
     """Centralized failure handling that uses LLM error classification to decide backoff.
@@ -291,8 +508,8 @@ _genai_client = None
 _gemini_backoff_until = 0.0
 _last_model_used = "unknown"
 _last_provider_used = "unknown"
-_GEMINI_USAGE_FILE = os.path.expanduser("~/.jarvis_gemini_usage.json")
-_PROVIDER_HEALTH_FILE = os.path.expanduser("~/.jarvis/provider_health.json")
+_GEMINI_USAGE_FILE = os.path.expanduser(os.getenv("JARVIS_GEMINI_USAGE_FILE", "~/.jarvis_gemini_usage.json"))
+_PROVIDER_HEALTH_FILE = os.path.expanduser(os.getenv("JARVIS_PROVIDER_HEALTH_FILE", "~/.jarvis/provider_health.json"))
 _provider_backoff_until = {}
 _provider_consecutive_failures = {}
 _provider_usage_count = {}
@@ -495,6 +712,43 @@ TOOL_USE_KEYWORDS = {
     "ip",
 }
 
+CAD_KEYWORDS = {
+    "onshape",
+    "cad",
+    "part studio",
+    "partstudio",
+    "feature",
+    "features",
+    "extrude",
+    "fillet",
+    "chamfer",
+    "hole",
+    "sketch",
+    "plane",
+    "assembly",
+    "assembly",
+    "drawing",
+    "document",
+    "workspace",
+    "element",
+    "dimension",
+    "parameter",
+    "sketch",
+    "constraint",
+    "mate",
+    "part",
+    "body",
+    "mass",
+    "volume",
+    "diameter",
+    "radius",
+    "depth",
+    "thickness",
+    "height",
+    "width",
+    "length",
+}
+
 
 def _local_intent_predict(text: str) -> tuple[str | None, float]:
     """Predict intent with the on-device NN router. Returns (None, 0.0) when disabled/unavailable."""
@@ -510,6 +764,15 @@ def _local_intent_predict(text: str) -> tuple[str | None, float]:
 
 _last_fine_intent: str | None = None
 _last_fine_confidence: float = 0.0
+_last_classifier_path: dict | None = None
+_cheap_call_count: int = 0
+_cheap_error_count: int = 0
+
+
+def get_last_classifier_path() -> dict | None:
+    """Classifier path (local_nn/cheap_groq/nemotron/keyword/cad/...) from the most
+    recent classify_intent call, with confidence and raw output where available."""
+    return _last_classifier_path
 
 
 def get_last_fine_intent() -> tuple[str | None, float]:
@@ -538,8 +801,27 @@ def _local_fine_predict(text: str, coarse: str) -> tuple[str | None, float]:
 
 def _clear_fine_intent() -> None:
     """Reset fine-intent globals so stale values from a prior request never leak."""
-    global _last_fine_intent, _last_fine_confidence
+    global _last_fine_intent, _last_fine_confidence, _last_classifier_path
     _last_fine_intent, _last_fine_confidence = None, 0.0
+    _last_classifier_path = None
+    _last_fine_intent, _last_fine_confidence = None, 0.0
+
+
+def _log_classifier_path(
+    path: str,
+    intent: str,
+    confidence: float | None = None,
+    raw: dict | None = None,
+) -> None:
+    """2B.0 telemetry: record which classifier produced an intent decision."""
+    measurable = {"path": path, "intent": intent}
+    if confidence is not None:
+        measurable["confidence"] = round(float(confidence), 3)
+    if raw:
+        measurable["raw"] = raw
+    global _last_classifier_path
+    _last_classifier_path = measurable
+    log_decision("understand", "classifier_path", measurable_inputs=measurable)
 
 
 def classify_intent(text: str) -> str:
@@ -573,14 +855,26 @@ def classify_intent(text: str) -> str:
     if any(f in t for f in self_mod_files):
         if any(v in t for v in self_mod_verbs):
             _debug(f"[Intent] classify_intent('{text}'): 'self_mod' — file + verb")
+            _log_classifier_path("keyword", "self_mod")
             return "self_mod"
     if any(f in t for f in self_mod_files_with_path):
         _debug(f"[Intent] classify_intent('{text}'): 'self_mod' — file path")
+        _log_classifier_path("keyword", "self_mod")
         return "self_mod"
     if any(k in t for k in ("my code", "jarvis code")):
         if any(v in t for v in self_mod_verbs):
             _debug(f"[Intent] classify_intent('{text}'): 'self_mod' — keyword + verb")
+            _log_classifier_path("keyword", "self_mod")
             return "self_mod"
+
+    # CAD / Onshape — keyword-first detection before LLM (like self_mod)
+    # Use word boundaries to avoid false positives like "documentation" containing "document"
+    import re
+    cad_pattern = re.compile(r"\b(" + "|".join(re.escape(k) for k in CAD_KEYWORDS) + r")\b")
+    if cad_pattern.search(t) or "cad.onshape.com" in t or "/documents/" in t:
+        _debug(f"[Intent] classify_intent('{text}'): 'cad' — CAD keyword/URL")
+        _log_classifier_path("keyword", "cad")
+        return "cad"
 
     # Memory triggers — handled directly in process(), not via tools
     memory_triggers = (
@@ -596,6 +890,7 @@ def classify_intent(text: str) -> str:
     )
     if any(k in t for k in memory_triggers):
         _debug(f"[Intent] classify_intent('{text}'): 'chat' — memory trigger")
+        _log_classifier_path("memory", "chat")
         return "chat"
 
     # Knowledge/memory queries — handled directly in process()
@@ -607,16 +902,19 @@ def classify_intent(text: str) -> str:
     )
     if any(k in t for k in knowledge_triggers):
         _debug(f"[Intent] classify_intent('{text}'): 'chat' — knowledge query")
+        _log_classifier_path("knowledge", "chat")
         return "chat"
 
     # Check intent cache (per-turn)
     if text in conversation_context.intent_cache:
         cached = conversation_context.intent_cache[text]
         _debug(f"[Intent] classify_intent('{text}'): '{cached}' — cached")
+        _log_classifier_path("cache", cached)
         return cached
 
-    # Local NN fast-path — skip cloud LLM when the on-device router is confident
-    if not JARVIS_MOCK_PROVIDERS and not JARVIS_EVAL_MODE:
+    # Local NN fast-path — skip cloud LLM when the on-device router is confident.
+    # Enabled in eval mode too so evaluation measures production routing behavior.
+    if not JARVIS_MOCK_PROVIDERS:
         _local_intent, _local_conf = _local_intent_predict(text)
         if _local_intent is not None and _local_conf >= _local_intent_threshold(_local_intent):
             conversation_context.intent_cache[text] = _local_intent
@@ -625,35 +923,100 @@ def classify_intent(text: str) -> str:
             _fine, _fine_conf = _local_fine_predict(text, _local_intent)
             if _fine is not None:
                 _debug(f"[Intent] fine: '{_fine}' ({_fine_conf:.2f})")
-            return _local_intent
+            agreement_suspicious = JARVIS_LOCAL_AGREEMENT_GATE and _fine is None
+            if agreement_suspicious:
+                _debug(
+                    f"[Intent] agreement gate: coarse '{_local_intent}' ({_local_conf:.2f}) "
+                    "but specialist withheld — escalating to LLM classify"
+                )
+            else:
+                _log_classifier_path(
+                    "local_nn", _local_intent, confidence=_local_conf,
+                    raw={"fine": _fine, "fine_conf": _fine_conf},
+                )
+                return _local_intent
 
     # LLM‑first classification for remaining cases (≈90% of cases)
-    if JARVIS_LLM_FIRST and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra") and not JARVIS_MOCK_PROVIDERS:
-        try:
-            llm_prompt = (
-                "Classify the following user request into one of these categories: "
-                "coding, tool_use, reasoning, self_mod, chat. Respond with only the category name.\n\n"
-                f"User request: {text}\n"
-            )
-            # Use the low‑level Nemotron Ultra call to avoid routing loops
-            classification = _retry(lambda: ask_nemotron_ultra(llm_prompt, []), max_retries=2).strip().lower()
+    if JARVIS_LLM_FIRST and not JARVIS_MOCK_PROVIDERS:
+        if JARVIS_ROUTER_CHEAP and GROQ_API_KEY:
+            # 2A.2: cheap Groq classifier — replaces the Nemotron classify
+            # round-trip. It can only emit intent fields (never a provider).
+            global _cheap_call_count, _cheap_error_count
+            _cheap_call_count += 1
+            try:
+                parsed = _cheap_classify(text)
+                classification = parsed["intent"] if parsed else None
+            except Exception as e:
+                _cheap_error_count += 1
+                _debug(f"[Intent] cheap classifier error: {e}")
+                classification = None
             if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
-                _debug(f"[Intent] LLM classification gave '{classification}'")
-                # If LLM says 'chat' but text matches reasoning patterns, defer to keyword fallback
-                reasoning_patterns = (
-                    "why does", "why is", "why are", "why would", "why did", "why do",
-                    "how do", "how does", "how can i", "how would", "how is it",
-                    "explain", "analyze", "design a", "design an", "strategy",
-                    "compare", "evaluate", "pros and cons", "think about",
-                    "what is the", "describe", "tell me about",
-                )
-                if classification == "chat" and any(k in t for k in reasoning_patterns):
-                    _debug("[Intent] LLM said 'chat' but reasoning pattern matched — deferring to keyword fallback")
+                _debug(f"[Intent] cheap classifier gave '{classification}' (fine={parsed.get('fine_intent')})")
+                escalation = classification == "tool_use" and parsed.get("tool_required") is False
+                # 2B.3: apply the frozen per-intent confidence gate to the cheap path too
+                cheap_conf = parsed.get("confidence")
+                if not escalation and cheap_conf is None:
+                    _debug("[Intent] cheap classifier gave no confidence — escalating to LLM classify")
+                    escalation = True
+                elif not escalation and cheap_conf < _local_intent_threshold(classification):
+                    _debug(
+                        f"[Intent] cheap confidence {cheap_conf:.2f} below gate "
+                        f"{_local_intent_threshold(classification):.2f} — escalating to LLM classify"
+                    )
+                    escalation = True
+                if not escalation and JARVIS_LOCAL_AGREEMENT_GATE and not parsed.get("fine_intent"):
+                    _debug("[Intent] agreement gate: cheap intent without fine intent — escalating to LLM classify")
+                    escalation = True
+                if escalation:
+                    _debug("[Intent] cheap said tool_use but tool_required=false — escalating to LLM classify")
                 else:
+                    try:
+                        if parsed.get("fine_intent"):
+                            _last_fine_intent, _last_fine_confidence = parsed["fine_intent"], 0.6
+                    except Exception:
+                        pass
+                    _log_classifier_path(
+                        "cheap_groq", classification, confidence=parsed.get("confidence"), raw=parsed
+                    )
                     conversation_context.intent_cache[text] = classification
                     return classification
-        except Exception as e:
-            _debug(f"[Intent] LLM classification error: {e}")
+        if NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
+            try:
+                llm_prompt = (
+                    "Classify the following user request into one of these categories: "
+                    "coding, tool_use, reasoning, self_mod, chat. Respond with only the category name.\n\n"
+                    f"User request: {text}\n"
+                )
+                # Use the low‑level Nemotron Ultra call to avoid routing loops
+                classification = (
+                    _retry(lambda: ask_nemotron_ultra(llm_prompt, [], timeout=45), max_retries=2).strip().lower()
+                )
+                if classification in {"coding", "tool_use", "reasoning", "self_mod", "chat"}:
+                    _debug(f"[Intent] LLM classification gave '{classification}'")
+                    _log_classifier_path("nemotron", classification)
+                    # If LLM says 'chat' but text matches reasoning patterns, defer to keyword fallback
+                    reasoning_patterns = (
+                        "why does", "why is", "why are", "why would", "why did", "why do",
+                        "how do", "how does", "how can i", "how would", "how is it",
+                        "explain", "analyze", "design a", "design an", "strategy",
+                        "compare", "evaluate", "pros and cons", "think about",
+                        "what is the", "describe", "tell me about",
+                    )
+                    if classification == "chat" and any(k in t for k in reasoning_patterns):
+                        _debug("[Intent] LLM said 'chat' but reasoning pattern matched — deferring to keyword fallback")
+                    else:
+                        conversation_context.intent_cache[text] = classification
+                        return classification
+            except Exception as e:
+                _debug(f"[Intent] LLM classification error: {e}")
+
+    # CAD / Onshape — early detection before keyword fallback
+    import re
+    cad_pattern = re.compile(r"\b(" + "|".join(re.escape(k) for k in CAD_KEYWORDS) + r")\b")
+    if cad_pattern.search(t) or "cad.onshape.com" in t:
+        _debug(f"[Intent] classify_intent('{text}'): 'cad' — CAD keyword/URL")
+        _log_classifier_path("keyword", "cad")
+        return "cad"
 
     # Keyword fallback for remaining cases
 
@@ -663,6 +1026,7 @@ def classify_intent(text: str) -> str:
 
     if coding_hit and not tool_hit:
         _debug(f"[Intent] classify_intent('{text}'): 'coding' — coding keyword")
+        _log_classifier_path("keyword", "coding")
         return "coding"
 
     # Both coding and tool keywords — disambiguate
@@ -687,13 +1051,16 @@ def classify_intent(text: str) -> str:
         )
         if any(k in t for k in tool_verbs):
             _debug(f"[Intent] classify_intent('{text}'): 'tool_use' — both keywords, disambig→tool")
+            _log_classifier_path("keyword", "tool_use")
             return "tool_use"
         _debug(f"[Intent] classify_intent('{text}'): 'coding' — both keywords, disambig→coding")
+        _log_classifier_path("keyword", "coding")
         return "coding"
 
     # Tool use
     if tool_hit:
         _debug(f"[Intent] classify_intent('{text}'): 'tool_use' — tool keyword")
+        _log_classifier_path("keyword", "tool_use")
         return "tool_use"
 
     # Reasoning — use phrases to avoid matching casual greetings like "hello how are you"
@@ -724,6 +1091,7 @@ def classify_intent(text: str) -> str:
     )
     if any(k in t for k in reasoning_patterns):
         _debug(f"[Intent] classify_intent('{text}'): 'reasoning' — reasoning pattern")
+        _log_classifier_path("keyword", "reasoning")
         return "reasoning"
 
     # Capability/gap analysis — questions about what Jarvis can do or is missing
@@ -740,14 +1108,17 @@ def classify_intent(text: str) -> str:
     ]
     if any(re.search(p, t) for p in capability_gap_patterns):
         _debug(f"[Intent] classify_intent('{text}'): 'tool_use' — capability/gap analysis")
+        _log_classifier_path("keyword", "tool_use")
         return "tool_use"
 
     # File extension hint — .py files imply coding
     if re.search(r"\b\w+\.(py|js|ts|java|cpp|c|h|go|rs|rb|sh)\b", t):
         _debug(f"[Intent] classify_intent('{text}'): 'coding' — file extension")
+        _log_classifier_path("keyword", "coding")
         return "coding"
 
     _debug(f"[Intent] classify_intent('{text}'): 'chat' — default fallback")
+    _log_classifier_path("keyword", "chat")
     conversation_context.intent_cache[text] = "chat"
     return "chat"
 
@@ -812,29 +1183,6 @@ def _estimate_task_complexity(text: str) -> int:
     - Whether multiple tools/files involved
     - User's explicit complexity hints
     """
-    # LLM‑first complexity estimation — ask for a 1-10 score, map to iterations
-    if JARVIS_LLM_FIRST:
-        prompt = (
-            "Rate the complexity of the following user request on a scale of 1-10. "
-            "Consider: number of implied steps, tools or files involved, ambiguity, and "
-            "whether it requires coding or research. Respond with ONLY an integer 1-10.\n\n"
-            f"User request: {text}\n"
-        )
-        score = _llm_choose(prompt)
-        if score is not None:
-            try:
-                n = int(re.search(r"\d+", score).group())
-                n = max(1, min(10, n))
-                if n >= 8:
-                    return 12
-                if n >= 6:
-                    return 8
-                if n >= 4:
-                    return 6
-                return 4
-            except Exception:
-                pass
-
     t = (text or "").lower()
 
     # Very complex: full projects, migrations, end-to-end builds
@@ -1067,7 +1415,7 @@ def _backoff_provider(provider_name: str, seconds: int = 600, exponential: bool 
     now = datetime.datetime.now().timestamp()
     _provider_backoff_until[provider_name] = now + seconds
     # circuit_open_until: separate immutable timeout — doesn't reset until cleared by success
-    circuit_seconds = max(seconds, 1800)
+    circuit_seconds = max(seconds, 300)
     h = _provider_health.setdefault(provider_name, _default_health_entry())
     h["circuit_open_until"] = now + circuit_seconds
     h["circuit_open"] = True
@@ -1107,13 +1455,12 @@ def get_runtime_status() -> dict:
         "model_preferred": NEMOTRON_ULTRA_MODEL,
         "model_fallback": GROQ_MODEL,
         "model_last_used": _last_model_used,
-        "api_key_configured": any([NVIDIA_NEMOTRON_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY]),
+        "api_key_configured": any([NVIDIA_NEMOTRON_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY]),
         "nemotron_usage": _nemotron_usage_count,
         "gemini_usage": _get_gemini_usage_count(),
         "providers": {
             "nemotron_ultra": bool(NVIDIA_NEMOTRON_API_KEY),
             "gemini": bool(GEMINI_API_KEY),
-            "deepseek": bool(DEEPSEEK_API_KEY),
             "groq": bool(GROQ_API_KEY),
             "openrouter": bool(OPENROUTER_API_KEY),
             "pollinations": True,
@@ -1126,7 +1473,6 @@ def get_runtime_status() -> dict:
 def check_providers() -> dict:
     providers = {
         "nemotron_ultra": bool(NVIDIA_NEMOTRON_API_KEY),
-        "deepseek": bool(DEEPSEEK_API_KEY),
         "gemini": bool(GEMINI_API_KEY),
         "groq": bool(GROQ_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
@@ -1136,11 +1482,10 @@ def check_providers() -> dict:
     }
     labels = {
         "nemotron_ultra": "NVIDIA Nemotron Ultra (primary, tool-first + final)",
-        "deepseek": "DeepSeek v4 Flash (coding only)",
         "gemini": "Gemini 2.5 Flash (fallback, tool calling)",
         "groq": "Groq llama-3.3-70b (fallback)",
         "openrouter": "OpenRouter deepseek-r1 (fallback)",
-        "nvidia_nim": "NVIDIA Nemotron Nano (fallback)",
+        "nvidia_nim": "NVIDIA NIM (fallback tiers)",
         "pollinations": "Pollinations.ai (no-key emergency)",
         "huggingface": "HuggingFace (embeddings/downloads)",
     }
@@ -1166,10 +1511,18 @@ def _get_client():
 
             _genai_client = genai.Client(
                 api_key=GEMINI_API_KEY,
-                http_options=_gtypes.HttpOptions(baseUrl=MOCK_PROVIDER_URL),
+                http_options=_gtypes.HttpOptions(
+                    baseUrl=MOCK_PROVIDER_URL,
+                    timeout=45_000,
+                ),
             )
         else:
-            _genai_client = genai.Client(api_key=GEMINI_API_KEY)
+            from google.genai import types as _gtypes
+
+            _genai_client = genai.Client(
+                api_key=GEMINI_API_KEY,
+                http_options=_gtypes.HttpOptions(timeout=45_000),
+            )
         print(f"  Gemini client ready. Preferred: {', '.join(GEMINI_MODELS)}")
         return _genai_client
     except Exception as e:
@@ -1525,6 +1878,37 @@ def _prefetch_tools_for_message(user_message: str) -> list[str]:
     return results
 
 
+def _format_short_circuit(prefetched: list[str]) -> str | None:
+    """T1: turn a locally prefetched tool result into a natural reply with
+    zero LLM calls. Returns None when the data isn't template-able."""
+    for r in prefetched:
+        if r.startswith("get_weather_detailed: "):
+            data = r[len("get_weather_detailed: ") :]
+            try:
+                temp = re.search(r"Temperature: ([^,]+)", data)
+                cond = re.search(r"°F,\s*([^.]*)\.", data)
+                hum = re.search(r"Humidity: (\d+)%", data)
+                wind = re.search(r"Wind: ([\d.]+) mph", data)
+                rain = re.search(r"Rain chance next 3 hours: (\d+)%", data)
+                parts = []
+                if temp:
+                    parts.append(f"Currently {temp.group(1).strip()}")
+                if cond:
+                    parts.append(cond.group(1).strip())
+                if hum:
+                    parts.append(f"humidity {hum.group(1)}%")
+                if wind:
+                    parts.append(f"wind at {wind.group(1)} mph")
+                if rain:
+                    parts.append(f"{rain.group(1)}% chance of rain in the next 3 hours")
+                if parts:
+                    return ", ".join(parts) + "."
+            except Exception:
+                pass
+            return data
+    return None
+
+
 def _sanitize_assistant_text(text: str) -> str:
     """Strip malformed structured blobs and reasoning artifacts some models return as plain text."""
     if not text:
@@ -1574,7 +1958,52 @@ def _sanitize_assistant_text(text: str) -> str:
     return stripped
 
 
-def ask_nemotron_ultra(user_message: str, tool_results: list[str]) -> str:
+def _nemotron_extra_body(reasoning_budget: int | None) -> dict:
+    """Build the NIM extra_body for a reasoning budget (None -> legacy 2048)."""
+    budget = reasoning_budget if reasoning_budget is not None else 2048
+    body: dict = {"chat_template_kwargs": {"enable_thinking": budget > 0}}
+    if budget > 0:
+        body["reasoning_budget"] = budget
+    return body
+
+
+def ask_nemotron_ultra(
+    user_message: str,
+    tool_results: list[str],
+    timeout: float = 90,
+    reasoning_budget: int | None = None,
+    models: list[str] | None = None,
+) -> str:
+    """Nemotron Ultra with in-slot understudy (NIM_MODEL_FRONTIER).
+
+    Tries each model in order under the same bounded timeout; only when the
+    whole slot is exhausted is the last exception re-raised, so the provider
+    chain records a real failure instead of a silent half-answer.
+    """
+    models_to_try = models or NIM_MODEL_FRONTIER
+    last_exc: Exception | None = None
+    for model in models_to_try:
+        try:
+            return _ask_nemotron_ultra_model(
+                user_message,
+                tool_results,
+                model=model,
+                timeout=timeout,
+                reasoning_budget=reasoning_budget,
+            )
+        except Exception as e:
+            _debug(f"Nemotron model {model} failed: {e}")
+            last_exc = e
+    raise last_exc if last_exc else Exception("NIM frontier slot exhausted")
+
+
+def _ask_nemotron_ultra_model(
+    user_message: str,
+    tool_results: list[str],
+    model: str = NEMOTRON_ULTRA_MODEL,
+    timeout: float = 90,
+    reasoning_budget: int | None = None,
+) -> str:
     from openai import OpenAI
 
     api_key = NVIDIA_NEMOTRON_API_KEY
@@ -1604,18 +2033,15 @@ def ask_nemotron_ultra(user_message: str, tool_results: list[str]) -> str:
         is_last_iter = _nemotron_loop_count >= 4
         tc = "none" if is_last_iter else "auto"
         response = client.chat.completions.create(
-            model=NEMOTRON_ULTRA_MODEL,
+            model=model,
             messages=messages,
             temperature=1,
             top_p=0.95,
             max_tokens=4096,
-            extra_body={
-                "chat_template_kwargs": {"enable_thinking": True},
-                "reasoning_budget": 2048,
-            },
+            extra_body=_nemotron_extra_body(reasoning_budget) if "nemotron" in model else None,
             tools=_build_openai_tools() if not is_last_iter else [],
             tool_choice=tc,
-            timeout=90,
+            timeout=timeout,
         )
 
         if not response.choices:
@@ -1888,22 +2314,47 @@ def _print_file_change(path: str, diff: str, ins: int, dels: int):
 
 
 def _execute_tool(fn_name: str, fn_args: dict) -> str:
+    tool_start = time.time()
     # Track tool names for eval harness / audit
     _tool_call_names.append(fn_name)
     # Per-turn memoization — same tool+args within one user message
     memo_key = f"{fn_name}:{str(sorted((k, str(v)) for k, v in (fn_args or {}).items()))}"
     cached = _turn_memo_cache.get(memo_key)
     if cached is not None:
+        log_decision(
+            phase="act",
+            decision="tool_memoized",
+            decision_source="memo_cache",
+            measurable_inputs={"tool": fn_name},
+            outcome="success",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         _debug(f"[Memo] Reusing cached result for {fn_name}")
         return cached
 
     fn = TOOL_REGISTRY.get(fn_name) or _learned_tools.get(fn_name)
     if not fn:
+        log_decision(
+            phase="act",
+            decision="tool_not_found",
+            decision_source="TOOL_REGISTRY_lookup",
+            measurable_inputs={"tool": fn_name},
+            outcome="failure",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         learner.learn_capability(f"implement {fn_name}")
         return f"Tool '{fn_name}' not available yet — learning it now."
 
     validation = validate_tool_args(fn_name, fn_args)
     if isinstance(validation, str):
+        log_decision(
+            phase="act",
+            decision="tool_validation_failed",
+            decision_source="validate_tool_args",
+            measurable_inputs={"tool": fn_name, "error": validation},
+            outcome="failure",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         return validation
     fn_name, fn_args = validation
 
@@ -1928,6 +2379,12 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
             and not action_sandbox.eval_mode()
             and action_sandbox.is_selfmod(fn_name, safe_args)
         ):
+            log_decision(
+                phase="safety",
+                decision="selfmod_detected",
+                decision_source="action_sandbox.is_selfmod",
+                measurable_inputs={"tool": fn_name, "target": safe_args.get("target", "")},
+            )
             _sm = action_sandbox.resolve_selfmod(fn_name, safe_args, fn)
             if _sm["new_code"].strip() != _sm["old_code"].strip():
                 _sm_analysis = action_sandbox.analyze_selfmod(_sm["target"], _sm["old_code"], _sm["new_code"])
@@ -1938,9 +2395,25 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
                 if _sm_analysis["blocked"] or not _sm_dry["ok"]:
                     _sm_blocked = _sm_analysis["blocked"] or [_sm_dry.get("error", "dry run failed")]
                     log_audit(fn_name, safe_args, "DANGEROUS", "BLOCKED", "; ".join(_sm_blocked))
+                    log_decision(
+                        phase="safety",
+                        decision="selfmod_blocked",
+                        decision_source="action_sandbox.analyze_selfmod",
+                        measurable_inputs={"tool": fn_name, "blocked_reasons": _sm_blocked},
+                        outcome="blocked",
+                        latency_ms=int((time.time() - tool_start) * 1000),
+                    )
                     return "Self-modification refused by sandbox review: " + "; ".join(_sm_blocked)
                 action_sandbox.stage_typed(
                     fn_name, fn, safe_args, action_sandbox.confirm_text_for(_sm["target"]), _sm_preview, _sm
+                )
+                log_decision(
+                    phase="safety",
+                    decision="selfmod_staged_for_confirmation",
+                    decision_source="action_sandbox.stage_typed",
+                    measurable_inputs={"tool": fn_name, "target": _sm["target"]},
+                    outcome="pending",
+                    latency_ms=int((time.time() - tool_start) * 1000),
                 )
                 raise NeedsConfirmation(
                     fn_name,
@@ -1952,11 +2425,25 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
             return f"No change needed — {_sm['target']} already matches the requested state."
         # ── FILE WRITES → unified diff preview ──
         if fn_name in file_sandbox.WRITE_TOOLS and file_sandbox.enabled() and not file_sandbox.eval_mode():
+            log_decision(
+                phase="safety",
+                decision="file_write_detected",
+                decision_source="file_sandbox.WRITE_TOOLS",
+                measurable_inputs={"tool": fn_name, "path": safe_args.get("path", "")},
+            )
             _sb_sim = file_sandbox.simulate(fn_name, safe_args)
             if _sb_sim:
                 _sb_path, _sb_old, _sb_new = _sb_sim
                 _sb_diff = file_sandbox.make_diff(_sb_path, _sb_old, _sb_new)
                 if _sb_diff:
+                    log_decision(
+                        phase="safety",
+                        decision="file_write_staged",
+                        decision_source="file_sandbox.stage",
+                        measurable_inputs={"tool": fn_name, "path": _sb_path, "diff_lines": len(_sb_diff.splitlines())},
+                        outcome="pending",
+                        latency_ms=int((time.time() - tool_start) * 1000),
+                    )
                     file_sandbox.stage(fn_name, safe_args, _sb_path, _sb_old, _sb_new, _sb_diff)
                     _sb_ins, _sb_dels = file_sandbox.counts(_sb_diff)
                     _print_file_change(_sb_path, _sb_diff, _sb_ins, _sb_dels)
@@ -1964,11 +2451,31 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
         if action_sandbox.enabled() and not action_sandbox.eval_mode():
             # ── TERMINAL / PYTHON → real sandboxed run preview ──
             if fn_name in action_sandbox.EXEC_TOOLS:
+                log_decision(
+                    phase="safety",
+                    decision="exec_tool_detected",
+                    decision_source="action_sandbox.EXEC_TOOLS",
+                    measurable_inputs={"tool": fn_name, "command": safe_args.get("command", "")[:200]},
+                )
                 if fn_name in ("run_terminal_command", "run_command_sandboxed"):
                     _cmd_ok, _cmd_level, _cmd_reason = analyze_command(safe_args.get("command", ""))
                     if not _cmd_ok:
                         log_audit(fn_name, safe_args, "CRITICAL", "BLOCKED", _cmd_reason)
+                        log_decision(
+                            phase="safety",
+                            decision="command_blocked",
+                            decision_source="analyze_command",
+                            measurable_inputs={"tool": fn_name, "reason": _cmd_reason},
+                            outcome="blocked",
+                            latency_ms=int((time.time() - tool_start) * 1000),
+                        )
                         raise PermissionDenied(f"Command blocked: {_cmd_reason}")
+                log_decision(
+                    phase="safety",
+                    decision="exec_preview_generated",
+                    decision_source="action_sandbox.run_exec_preview",
+                    measurable_inputs={"tool": fn_name},
+                )
                 _sb_exec = action_sandbox.run_exec_preview(fn_name, safe_args)
                 print(
                     f"\n========== [Jarvis Sandbox] Preview (sandboxed run) ==========\n"
@@ -1987,6 +2494,12 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
                         fn_name, safe_args, "WARNING", action_sandbox.confirm_message(fn_name, safe_args)
                     )
             elif fn_name in action_sandbox.INTENT_PREVIEW_TOOLS:
+                log_decision(
+                    phase="safety",
+                    decision="intent_preview_generated",
+                    decision_source="action_sandbox.format_intent_preview",
+                    measurable_inputs={"tool": fn_name},
+                )
                 _sb_intent = action_sandbox.format_intent_preview(fn_name, safe_args)
                 print(
                     f"\n========== [Jarvis Sandbox] Intent preview ==========\n"
@@ -2010,23 +2523,77 @@ def _execute_tool(fn_name: str, fn_args: dict) -> str:
                 f"Write to {_sb_path} (+{_sb_ins}/-{_sb_dels} lines) awaits your approval "
                 "— say yes to apply, no to cancel."
             )
+            log_decision(
+                phase="safety",
+                decision="confirmation_required",
+                decision_source="file_sandbox_or_action_sandbox",
+                measurable_inputs={"tool": fn_name, "path": _sb_path, "ins": _sb_ins, "dels": _sb_dels},
+                outcome="pending",
+                latency_ms=int((time.time() - tool_start) * 1000),
+            )
             raise NeedsConfirmation(fn_name, safe_args, "WARNING", _sb_message)
         if not _sb_gated:
+            log_decision(
+                phase="safety",
+                decision="permission_check",
+                decision_source="check_permission",
+                measurable_inputs={"tool": fn_name, "level": TOOL_PERMISSIONS.get(fn_name, "WARNING")},
+            )
             check_permission(fn_name, safe_args)
+        log_decision(
+            phase="act",
+            decision="tool_execute_start",
+            decision_source="direct_execution",
+            measurable_inputs={"tool": fn_name, "args_keys": list(safe_args.keys())},
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         _debug(f"[TOOL EXECUTE] {fn_name}({safe_args})")
         result = fn(**safe_args)
         log_audit(fn_name, safe_args, TOOL_PERMISSIONS.get(fn_name, "WARNING"), "EXECUTED")
         result_str = str(result)
+        log_decision(
+            phase="act",
+            decision="tool_execute_complete",
+            decision_source="direct_execution",
+            measurable_inputs={"tool": fn_name, "result_len": len(result_str)},
+            outcome="success",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         _debug(f"[TOOL RESULT] {fn_name}: {result_str[:200]}")
         _turn_memo_cache[memo_key] = result_str
         return result_str
     except NeedsConfirmation as e:
+        log_decision(
+            phase="safety",
+            decision="confirmation_needed",
+            decision_source="NeedsConfirmation",
+            measurable_inputs={"tool": fn_name, "level": e.level, "message": e.message[:200]},
+            outcome="pending",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         set_pending_safe(fn_name, fn, safe_args, e.level)
         return e.message
     except PermissionDenied as e:
+        log_decision(
+            phase="safety",
+            decision="permission_denied",
+            decision_source="PermissionDenied",
+            measurable_inputs={"tool": fn_name, "error": str(e)},
+            outcome="blocked",
+            latency_ms=int((time.time() - tool_start) * 1000),
+        )
         _speak_direct("Blocked for safety.")
         return str(e)
     except Exception as e:
+        log_decision(
+            phase="act",
+            decision="tool_error",
+            decision_source="unhandled_exception",
+            measurable_inputs={"tool": fn_name, "error": str(e)},
+            outcome="failure",
+            latency_ms=int((time.time() - tool_start) * 1000),
+            error=str(e),
+        )
         return f"Tool error: {e}"
 
 
@@ -2695,7 +3262,7 @@ def ask_nim_with_context(user_message: str, tool_results: list[str], models: lis
     client = OpenAI(api_key=api_key, base_url=base_url)
     messages = _build_nim_messages(user_message, tool_results)
 
-    models_to_try = models or NIM_MODEL_TIER5
+    models_to_try = models or NIM_MODEL_FAST
     last_exc = Exception("No NIM model attempted")
     for model in models_to_try:
         try:
@@ -2714,7 +3281,7 @@ def _ask_nim_loop(client, messages: list, model: str, provider_name: str = "NVID
             "messages": messages,
             "temperature": 0.7,
             "max_tokens": 1024,
-            "timeout": 60,
+            "timeout": 30,
         }
         # Always use modern tools/tool_choice format (NVIDIA deprecated functions/function_call)
         tools = _build_openai_tools()
@@ -2837,26 +3404,112 @@ def _ask_nim_loop(client, messages: list, model: str, provider_name: str = "NVID
     raise Exception(f"{provider_name} tool execution did not resolve")
 
 
-def ask_nim_tier5(user_message: str, tool_results: list[str]) -> str:
-    """NIM Tier 5: Llama 4 Maverick → MiniMax M2.7 (Phase 2.1)."""
-    return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_TIER5, provider_name="NVIDIA NIM Tier 5")
+def ask_nim_fast(user_message: str, tool_results: list[str]) -> str:
+    """NIM Fast slot: super-49b-v1.5 → nano-30b → step-3.7 (verified 0.3-0.4s)."""
+    return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_FAST, provider_name="NIM Fast")
 
 
-def ask_nim_tier6(user_message: str, tool_results: list[str]) -> str:
-    """NIM Tier 6: Qwen 3.5 → Mistral Large 3 (Phase 2.1)."""
-    return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_TIER6, provider_name="NVIDIA NIM Tier 6")
+def ask_nim_coding(user_message: str, tool_results: list[str]) -> str:
+    """NIM Coding slot: minimax-m3 → gpt-oss-20b → deepseek-v4-flash (verified 1.1-1.8s)."""
+    return ask_nim_with_context(user_message, tool_results, models=NIM_MODEL_CODING, provider_name="NIM Coding")
 
 
-def ask_deepseek(user_message: str, tool_results: list[str]) -> str:
-    return _ask_openai_compatible(
-        "DeepSeek Flash",
-        DEEPSEEK_API_KEY,
-        "https://integrate.api.nvidia.com/v1",
-        DEEPSEEK_MODEL,
-        user_message,
-        tool_results,
-        functions=_build_openai_functions(),
+def _cheap_classify(user_message: str) -> dict | None:
+    """2A.2 cheap intent classifier (Groq, JSON completion).
+
+    Contract (routing_policy.CLASSIFIER_KEYS): may only return intent fields
+    — it can NEVER select a provider. Falls back to the legacy path on any
+    error by raising, so callers degrade gracefully.
+    """
+    from openai import OpenAI
+    from routing_policy import parse_classifier_output
+
+    client = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
+    system = (
+        "You classify user requests into exactly one of five intents. Each request gets "
+        "exactly ONE intent, plus an optional fine-grained intent and a confidence score.\n\n"
+        "INTENT DEFINITIONS:\n"
+        "- coding: the user wants CODE WORK - writing, fixing, refactoring, reviewing, "
+        "porting, optimizing, debugging, or documenting scripts/functions/projects. "
+        "Includes 'write a script that...', 'write a function...', 'add feature X to a CLI "
+        "tool', 'design the endpoints/API for...', 'review this function', 'refactor this', "
+        "'port X to Y', 'translate this script'. The words script, function, endpoint, API, "
+        "code, CLI, class, README, bug are strong coding signals.\n"
+        "- tool_use: the user wants Jarvis to DO something on the machine or web: open/quit "
+        "apps, search the web, weather, timers, spotify, calendar, files/folders, "
+        "screen/computer actions, terminal commands, iMessage, discord. 'Open', 'search "
+        "for', 'play', 'set a timer', 'what's my CPU', 'click', 'navigate', 'upload a file "
+        "to X' are tool signals.\n"
+        "- reasoning: conceptual explanation or analysis of HOW/WHY something works, general "
+        "knowledge ('why does the sky look blue', 'explain the GIL', 'compare X and Y', "
+        "'pros and cons', 'what is the difference between'). NOT code tasks: 'explain a "
+        "context manager' is reasoning, but 'fix my context manager' is coding.\n"
+        "- self_mod: the user asks Jarvis to change Jarvis's own code or source files "
+        "(brain.py, terminal.py, server.py, tools/, config.py) - 'fix brain.py', 'modify "
+        "yourself', 'improve your code'.\n"
+        "- chat: everything else - casual conversation, memory ('remember that'), questions "
+        "about Jarvis itself, greetings.\n\n"
+        "RULES:\n"
+        "- A request to WRITE or FIX CODE is always coding, never tool_use, even when the "
+        "code does something (watching a directory, uploading files, parsing CSV).\n"
+        "- 'Design the endpoints/API/schema for X' is coding (implement_feature or "
+        "design_api), never reasoning and never tool_use.\n"
+        "- 'Review/Refactor/Optimize/Port' followed by code context is coding.\n"
+        "- tool_required: true if fulfilling the request needs a tool (web search, file "
+        "ops, app control, running code). 'Write me a function' is false; 'find files in "
+        "~/Downloads' is true.\n"
+        "- confidence: your confidence in the intent choice, 0.0-1.0.\n\n"
+        "EXAMPLES:\n"
+        "User: 'Write a Python function that computes the Levenshtein distance'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"write_code\", \"complexity\": 2, "
+        "\"tool_required\": false, \"confidence\": 0.98}\n"
+        "User: 'Write a script that finds duplicate files by content hash in a given directory'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"write_script\", \"complexity\": 2, "
+        "\"tool_required\": false, \"confidence\": 0.95}\n"
+        "User: 'Design the endpoints for a file upload service with resumable uploads'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"design_api\", \"complexity\": 3, "
+        "\"tool_required\": false, \"confidence\": 0.93}\n"
+        "User: 'Add progress bar support to a CLI tool using tqdm'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"implement_feature\", "
+        "\"complexity\": 2, \"tool_required\": false, \"confidence\": 0.9}\n"
+        "User: 'Review this function for bugs and edge cases: it slices a list without any bounds checks'\n"
+        " -> {\"intent\": \"coding\", \"fine_intent\": \"review_code\", \"complexity\": 2, "
+        "\"tool_required\": false, \"confidence\": 0.92}\n"
+        "User: 'Open safari and search for weather in Tokyo'\n"
+        " -> {\"intent\": \"tool_use\", \"fine_intent\": \"browser\", \"complexity\": 1, "
+        "\"tool_required\": true, \"confidence\": 0.99}\n"
+        "User: 'Set a timer called tea for 10 seconds'\n"
+        " -> {\"intent\": \"tool_use\", \"fine_intent\": \"timer\", \"complexity\": 1, "
+        "\"tool_required\": true, \"confidence\": 0.99}\n"
+        "User: 'Why does Python's GIL affect threading performance'\n"
+        " -> {\"intent\": \"reasoning\", \"fine_intent\": \"explain_concept\", "
+        "\"complexity\": 2, \"tool_required\": false, \"confidence\": 0.97}\n"
+        "User: 'Explain what a context manager is and why with open works'\n"
+        " -> {\"intent\": \"reasoning\", \"fine_intent\": \"explain_concept\", "
+        "\"complexity\": 1, \"tool_required\": false, \"confidence\": 0.95}\n"
+        "User: 'Fix brain.py, the wake word handler crashes'\n"
+        " -> {\"intent\": \"self_mod\", \"fine_intent\": \"modify_self\", \"complexity\": 3, "
+        "\"tool_required\": false, \"confidence\": 0.97}\n"
+        "User: 'hello how are you today'\n"
+        " -> {\"intent\": \"chat\", \"fine_intent\": \"conversation\", \"complexity\": 0, "
+        "\"tool_required\": false, \"confidence\": 0.99}\n\n"
+        "Respond ONLY with a JSON object with keys: intent (one of the five), fine_intent "
+        "(optional string), complexity (0-4), tool_required (bool), confidence (0-1). "
+        "No other keys or text."
     )
+    resp = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": (user_message or "")[:1200]},
+        ],
+        temperature=0,
+        max_tokens=140,
+        timeout=30,
+        response_format={"type": "json_object"},
+    )
+    content = (resp.choices[0].message.content or "") if resp.choices else ""
+    return parse_classifier_output(content)
 
 
 def ask_groq(user_message: str, tool_results: list[str]) -> str:
@@ -3070,22 +3723,214 @@ Always prefer real tool results over assumptions."""
     return results, direct_answer
 
 
+def _handle_cad_request(user_message: str) -> str:
+    """Handle CAD/Onshape read requests (Phase 1: read-only)."""
+    _debug(f"[CAD] Handling request: {user_message}")
+    try:
+        from tools.onshape_tools import (
+            list_documents,
+            get_document,
+            list_elements,
+            get_features,
+            get_feature_params,
+            get_part_studio_info,
+            parse_onshape_url,
+            _extract_ids_from_message,
+            format_document_list,
+            format_feature_list,
+            format_feature_params,
+            format_part_studio_info,
+        )
+    except Exception as e:
+        _debug(f"[CAD] Import error: {e}")
+        return "Onshape tools not available."
+
+    # Try to extract document/workspace/element IDs from message
+    did = wid = eid = None
+    extracted = _extract_ids_from_message(user_message)
+    if extracted:
+        did, wid, eid = extracted
+
+    t = user_message.lower()
+
+    # 1. List documents
+    if any(k in t for k in ("list", "show", "what", "my documents", "documents")):
+        if "document" in t and ("list" in t or "show" in t or "what" in t):
+            result = list_documents(limit=20)
+            if not result.get("ok"):
+                return f"Failed to list documents: {result.get('error')}"
+            from tools.onshape_tools import format_document_list
+            return f"Your Onshape documents:\n{format_document_list(result['data'])}"
+
+    # List elements in workspace (only needs did + wid)
+    if did and wid and not eid:
+        if "element" in t or "part studio" in t or "assembly" in t or "drawing" in t:
+            if "list" in t or "show" in t or "what" in t:
+                result = list_elements(did, wid)
+                if not result.get("ok"):
+                    return f"Failed to list elements: {result.get('error')}"
+                elems = result["data"]
+                if not elems:
+                    return "No elements found in that workspace."
+                lines = ["Elements in workspace:"]
+                for e in elems:
+                    lines.append(f"  • {e.get('name', 'Unnamed')}  [{e.get('type', 'unknown')}]  id:{e.get('elementId', '')[:8]}...")
+                return "\n".join(lines)
+
+    # If we have a document URL or IDs, handle element-specific queries
+    if did and wid and eid:
+        # List elements in a document/workspace
+        if "element" in t or "part studio" in t or "assembly" in t or "drawing" in t:
+            if "list" in t or "show" in t or "what" in t:
+                result = list_elements(did, wid)
+                if not result.get("ok"):
+                    return f"Failed to list elements: {result.get('error')}"
+                elems = result["data"]
+                if not elems:
+                    return "No elements found in that workspace."
+                lines = ["Elements in workspace:"]
+                for e in elems:
+                    lines.append(f"  • {e.get('name', 'Unnamed')}  [{e.get('type', 'unknown')}]  id:{e.get('elementId', '')[:8]}...")
+                return "\n".join(lines)
+
+        # Get features for a Part Studio
+        if "feature" in t or "extrude" in t or "fillet" in t or "hole" in t or "sketch" in t or "plane" in t:
+            # Specific feature parameter query takes precedence over list
+            # e.g., "what's the diameter of Hole 1" or "depth of Extrude 1"
+            param_keywords = ("diameter", "radius", "depth", "dimension", "parameter", "value")
+            if any(k in t for k in param_keywords):
+                # Try to find feature by name in message
+                import re
+                feature_name_match = re.search(r'["\']([^"\']+)["\']', user_message)
+                if not feature_name_match:
+                    feature_name_match = re.search(r'\b(Hole|Fillet|Extrude|Sketch|Plane|Hole|Chamfer)\s+\d+', user_message, re.IGNORECASE)
+                feature_name = feature_name_match.group(0) if feature_name_match else None
+
+                if feature_name:
+                    feat_result = get_features(did, wid, eid)
+                    if feat_result.get("ok"):
+                        features = feat_result["data"]
+                        for f in features:
+                            if feature_name.lower() in f.get("name", "").lower():
+                                param_result = get_feature_params(did, wid, eid, f["featureId"])
+                                if param_result.get("ok"):
+                                    from tools.onshape_tools import format_feature_params
+                                    return f"{f['name']} parameters:\n{format_feature_params(param_result['data']['parameters'])}"
+                                break
+                        else:
+                            return f"Feature '{feature_name}' not found in Part Studio."
+                else:
+                    return "Please specify which feature (e.g., 'Hole 1', 'Fillet 1')."
+
+            # List all features
+            if "list" in t or "show" in t or "what" in t or "all" in t:
+                result = get_features(did, wid, eid)
+                if not result.get("ok"):
+                    return f"Failed to get features: {result.get('error')}"
+                from tools.onshape_tools import format_feature_list
+                return f"Features in Part Studio:\n{format_feature_list(result['data'])}"
+
+        # Part Studio info (parts, bodies)
+        if "part" in t and ("list" in t or "show" in t or "what" in t):
+            result = get_part_studio_info(did, wid, eid)
+            if not result.get("ok"):
+                return f"Failed to get Part Studio info: {result.get('error')}"
+            from tools.onshape_tools import format_part_studio_info
+            return format_part_studio_info(result["data"])
+
+    # If we have document ID but no workspace/element, get document info
+    if did and not (wid and eid):
+        if "document" in t or "workspace" in t:
+            result = get_document(did)
+            if not result.get("ok"):
+                return f"Failed to get document: {result.get('error')}"
+            doc = result["data"]
+            workspaces = doc.get("workspaces", [])
+            lines = [f"Document: {doc.get('name', 'Unnamed')}"]
+            lines.append(f"  Default workspace: {doc.get('defaultWorkspace', {}).get('name', 'N/A')}")
+            if workspaces:
+                lines.append("Workspaces:")
+                for w in workspaces[:5]:
+                    lines.append(f"  • {w.get('name')}  (id: {w.get('id')[:8]}...)")
+            return "\n".join(lines)
+
+    # Fallback: generic help
+    if did and wid and eid:
+        return (
+            f"Found Part Studio (did={did[:8]}, wid={wid[:8]}, eid={eid[:8]}). "
+            "Try: 'list features', 'what's the diameter of Hole 1', 'list parts', 'show elements'"
+        )
+    elif did:
+        return (
+            f"Found document (did={did[:8]}). "
+            "Try: 'list elements', 'show workspaces', or paste a full Part Studio URL."
+        )
+    else:
+        return (
+            "I can help with Onshape! Try:\n"
+            "  • 'list my onshape documents'\n"
+            "  • Paste a document URL: https://cad.onshape.com/documents/.../w/.../e/...\n"
+            "  • Then: 'list features', 'what's the diameter of Hole 1', 'list parts'"
+        )
+
+
 def ask_with_tools(user_message: str) -> str:
     global _last_provider_used, _last_model_used, _nemotron_usage_count
 
+    ask_start = time.time()
+
     # ── Hybrid routing: local MLX first (simple chat, works offline) ──
+    intent_start = time.time()
     intent = classify_intent(user_message)
+    log_decision(
+        phase="understand",
+        decision="intent_classified",
+        decision_source="classify_intent",
+        measurable_inputs={"intent": intent},
+        latency_ms=int((time.time() - intent_start) * 1000),
+    )
     _debug(f"[Router] Intent: {intent}")
     local_reply = _try_local_routing(user_message, intent=intent)
     if local_reply is not None:
+        log_decision(
+            phase="act",
+            decision="local_routing_used",
+            decision_source="_try_local_routing",
+            measurable_inputs={"intent": intent},
+            outcome="success",
+            latency_ms=int((time.time() - ask_start) * 1000),
+        )
         return local_reply
 
+    # ── CAD / Onshape intent (read-only Phase 1) ──
+    if intent == "cad":
+        log_decision(
+            phase="act",
+            decision="cad_handler",
+            decision_source="intent_equals_cad",
+            measurable_inputs={"intent": intent},
+        )
+        return _handle_cad_request(user_message)
+
     if not _internet_available():
+        log_decision(
+            phase="act",
+            decision="no_internet",
+            decision_source="_internet_available",
+            outcome="failure",
+        )
         return "No internet connection. Cloud AI providers require internet access."
 
     # ── Daily cost budget guardrail (JARVIS_DAILY_BUDGET_USD; 0 = unlimited) ──
     _budget_hit, _spent, _limit = _daily_budget_exceeded()
     if _budget_hit:
+        log_decision(
+            phase="act",
+            decision="budget_exhausted",
+            decision_source="_daily_budget_exceeded",
+            measurable_inputs={"spent": _spent, "limit": _limit},
+            outcome="failure",
+        )
         try:
             from local_provider import is_available, ask_local
 
@@ -3111,23 +3956,122 @@ def ask_with_tools(user_message: str) -> str:
             _debug(f"[Cache] Read intent={intent}, checking semantic cache...")
             cached = semantic_cache_get(user_message, intent)
             if cached is not None:
+                log_decision(
+                    phase="act",
+                    decision="cache_hit",
+                    decision_source="semantic_cache_get",
+                    measurable_inputs={"intent": intent},
+                    outcome="success",
+                    latency_ms=int((time.time() - ask_start) * 1000),
+                )
                 _debug(f"[Cache] HIT for intent={intent}, returning cached response")
                 return cached
         except Exception:
             pass
     else:
+        log_decision(
+            phase="understand",
+            decision="cache_bypass",
+            decision_source="intent_not_chat",
+            measurable_inputs={"intent": intent},
+        )
         _debug(f"[Router] Semantic cache bypass for intent={intent}")
 
-    # ── Primary: Nemotron Ultra (tool-first + final) ──
+    # ── Latency policy: effort tier → provider-agnostic scoring ──
+    # Pure routing-layer change (vNext): the E3/2B classifier and its gates
+    # are untouched. This only decides WHO answers and HOW HARD they think.
+    _effort_budget: int | None = None
+    if JARVIS_LATENCY_POLICY and intent != "cad":
+        from latency_policy import EFFORT_WEIGHTS, task_profile
+
+        prof = task_profile(intent, user_message, _estimate_task_complexity(user_message))
+        log_decision(
+            phase="act",
+            decision="task_profile",
+            decision_source="latency_policy",
+            measurable_inputs=dict(prof),
+        )
+        _debug(f"[Latency] profile: {prof}")
+        if prof.get("short_circuit") or intent == "tool_use":
+            prefetched_hint = _prefetch_tools_for_message(user_message)
+        else:
+            prefetched_hint = []
+        if prof.get("short_circuit"):
+            sc = _format_short_circuit(prefetched_hint)
+            if sc is not None:
+                log_decision(
+                    phase="act",
+                    decision="short_circuit_reply",
+                    decision_source="latency_policy",
+                    outcome="success",
+                    measurable_inputs={"tier": "T1", "llm_calls": 0},
+                )
+                _debug("[Latency] T1 short-circuit reply (0 LLM calls)")
+                _last_provider_used = "short_circuit"
+                _last_model_used = "prefetched_tool_data"
+                return sc
+        if prof["effort"] == "low":
+            ordered = _effort_candidate_order(intent, EFFORT_WEIGHTS["low"], prof)
+            eligible = [e for e in ordered if e.get("status") == "eligible"]
+            _debug(f"[Latency] low-effort chain: {[e['provider'] for e in eligible]}")
+            for _cand in eligible:
+                _key = _cand["provider"]
+                _display, _avail, _ask_fn, _model = _POLICY_PRIMARY_CALLS[_key]
+                try:
+                    if not _avail() or not _provider_available(_display):
+                        continue
+                except Exception:
+                    continue
+                try:
+                    _debug(f"[Latency] low-effort primary: {_display}")
+                    _last_provider_used = _key
+                    _last_model_used = _model
+                    if _key == "groq":
+                        reply = _retry(lambda: ask_groq(user_message, prefetched_hint), max_retries=1)
+                    else:
+                        reply = _retry(lambda: _ask_fn(user_message), max_retries=1)
+                    _record_provider_success(_display)
+                    return reply
+                except Exception as e:
+                    _debug(f"[Latency] {_display} low-effort attempt failed: {e}")
+                    _handle_provider_failure(_display, e)
+            _debug("[Latency] low-effort chain exhausted — falling through to standard chain")
+        _effort_budget = prof.get("thinking_budget", 2048)
+
+    # ── Primary: deterministic (policy or Nemotron-default) tool-first + final ──
+    _nemotron_attempted = False
     if JARVIS_LLM_FIRST:
-        chosen = _select_primary_provider(user_message)
+        provider_select_start = time.time()
+        chosen = _select_primary_provider(user_message, intent)
+        chosen = "nemotron_ultra" if chosen is None else chosen
+        log_decision(
+            phase="act",
+            decision="provider_selected",
+            decision_source=(
+                "routing_policy" if JARVIS_ROUTER_POLICY else "deterministic_default"
+            ),
+            measurable_inputs={"provider": chosen, "intent": intent, "policy_on": JARVIS_ROUTER_POLICY},
+            latency_ms=int((time.time() - provider_select_start) * 1000),
+        )
         if chosen == "nemotron_ultra" and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
+            log_decision(
+                phase="act",
+                decision="provider_selected",
+                decision_source="nemotron_primary",
+                measurable_inputs={"provider": "Nemotron Ultra", "model": NEMOTRON_ULTRA_MODEL},
+            )
+            _nemotron_attempted = True
             try:
-                _debug("[Router] Nemotron Ultra primary (selected by LLM)")
+                _debug("[Router] Nemotron Ultra primary")
                 _last_provider_used = "nemotron_ultra"
                 _last_model_used = NEMOTRON_ULTRA_MODEL
                 _nemotron_usage_count += 1
-                reply = _retry(lambda: ask_nemotron_ultra(user_message, []), max_retries=2)
+                reply = _retry(
+                lambda: ask_nemotron_ultra(
+                    user_message, [], reasoning_budget=_effort_budget
+                ),
+                max_retries=2,
+            )
                 if has_pending_safe():
                     with _pending_lock:
                         pending_tool = _pending_safe.get("tool", "that")
@@ -3135,27 +4079,50 @@ def ask_with_tools(user_message: str) -> str:
                 _record_provider_success("Nemotron Ultra")
                 return reply
             except Exception as e:
-                _debug(f"Nemotron Ultra primary failed (LLM-selected): {e}")
+                _debug(f"Nemotron Ultra primary failed: {e}")
                 _handle_provider_failure("Nemotron Ultra", e)
-        elif chosen == "deepseek" and DEEPSEEK_API_KEY and _provider_available("DeepSeek"):
-            try:
-                _debug("[Router] DeepSeek primary (selected by LLM)")
-                _last_provider_used = "deepseek"
-                _last_model_used = DEEPSEEK_MODEL
-                reply = _retry(lambda: ask_deepseek(user_message, []), max_retries=2)
-                _record_provider_success("DeepSeek")
-                return reply
-            except Exception as e:
-                _debug(f"DeepSeek primary failed (LLM-selected): {e}")
-                _handle_provider_failure("DeepSeek", e)
+        elif JARVIS_ROUTER_POLICY and chosen in _POLICY_PRIMARY_CALLS:
+            display, available_fn, ask_fn, model = _POLICY_PRIMARY_CALLS[chosen]
+            if available_fn() and _provider_available(display):
+                log_decision(
+                    phase="act",
+                    decision="provider_selected",
+                    decision_source="routing_policy_primary",
+                    measurable_inputs={"provider": display, "model": model},
+                )
+                try:
+                    _debug(f"[Router] Policy primary: {display} (chosen={chosen})")
+                    _last_provider_used = chosen
+                    _last_model_used = model
+                    reply = _retry(ask_fn, max_retries=2)
+                    if has_pending_safe():
+                        with _pending_lock:
+                            pending_tool = _pending_safe.get("tool", "that")
+                        return f"I need your permission to {pending_tool.replace('_', ' ')}. Shall I go ahead?"
+                    _record_provider_success(display)
+                    return reply
+                except Exception as e:
+                    _debug(f"{display} policy-primary failed: {e}")
+                    _handle_provider_failure(display, e)
     # Fallback to original provider logic
-    if NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
+    if not _nemotron_attempted and NVIDIA_NEMOTRON_API_KEY and _provider_available("Nemotron Ultra"):
+        log_decision(
+            phase="act",
+            decision="provider_selected",
+            decision_source="fallback_nemotron",
+            measurable_inputs={"provider": "Nemotron Ultra", "model": NEMOTRON_ULTRA_MODEL},
+        )
         try:
             _debug("[Router] Nemotron Ultra primary")
             _last_provider_used = "nemotron_ultra"
             _last_model_used = NEMOTRON_ULTRA_MODEL
             _nemotron_usage_count += 1
-            reply = _retry(lambda: ask_nemotron_ultra(user_message, []), max_retries=2)
+            reply = _retry(
+                lambda: ask_nemotron_ultra(
+                    user_message, [], reasoning_budget=_effort_budget
+                ),
+                max_retries=2,
+            )
             if has_pending_safe():
                 with _pending_lock:
                     pending_tool = _pending_safe.get("tool", "that")
@@ -3167,6 +4134,12 @@ def ask_with_tools(user_message: str) -> str:
             _handle_provider_failure("Nemotron Ultra", e)
 
     # ── Plugin providers (after Nemotron, before built-in fallback) ──
+    log_decision(
+        phase="act",
+        decision="plugin_providers_attempted",
+        decision_source="plugin_manager",
+        measurable_inputs={},
+    )
     try:
         from plugin_manager import get_plugin_providers
 
@@ -3175,18 +4148,37 @@ def ask_with_tools(user_message: str) -> str:
             if not _provider_available(pname):
                 continue
             try:
+                log_decision(
+                    phase="act",
+                    decision="plugin_provider_attempted",
+                    decision_source="plugin_manager",
+                    measurable_inputs={"provider": pname},
+                )
                 _debug(f"[Router] Trying plugin provider: {pname}")
                 reply = _retry(lambda: pp["handler"](user_message, []), max_retries=2)
                 _last_provider_used = pname.lower().replace(" ", "_")
                 _record_provider_success(pname)
                 return reply
             except Exception as e:
+                log_decision(
+                    phase="act",
+                    decision="plugin_provider_failed",
+                    decision_source="plugin_manager",
+                    measurable_inputs={"provider": pname, "error": str(e)},
+                    outcome="failure",
+                )
                 _debug(f"Plugin provider {pname} failed: {e}")
                 _handle_provider_failure(pname, e)
     except Exception:
         pass
 
     # ── Capture tool results from primary provider (Nemotron) for fallback context ──
+    log_decision(
+        phase="act",
+        decision="context_preparation",
+        decision_source="_prefetch_tools_for_message",
+        measurable_inputs={"accumulated_count": len(_turn_memo_cache)},
+    )
     _accumulated_tool_results = []
     _TOOL_RESULT_LIMIT = 2000
     for key, val in _turn_memo_cache.items():
@@ -3211,6 +4203,17 @@ def ask_with_tools(user_message: str) -> str:
             break
     combined_results = truncated
     if combined_results:
+        log_decision(
+            phase="act",
+            decision="fallback_context_prepared",
+            decision_source="combined_results",
+            measurable_inputs={
+                "total_count": len(combined_results),
+                "accumulated_count": len(_accumulated_tool_results),
+                "prefetched_count": len(prefetched),
+                "char_count": char_count,
+            },
+        )
         _debug(f"Passing {len(combined_results)} tool results to fallbacks ({len(_accumulated_tool_results)} from primary + {len(prefetched)} prefetched, truncated to ~{char_count // 4}t)")
     else:
         _debug("No accumulated tool results from primary provider")
@@ -3218,39 +4221,102 @@ def ask_with_tools(user_message: str) -> str:
     # Sort providers by health score descending for intelligent fallback
     _provider_health_scores.setdefault("Gemini", 100)
     _provider_health_scores.setdefault("Groq", 100)
-    _provider_health_scores.setdefault("NVIDIA NIM Tier 5", 100)
-    _provider_health_scores.setdefault("NVIDIA NIM Tier 6", 100)
+    _provider_health_scores.setdefault("NIM Fast", 100)
+    _provider_health_scores.setdefault("NIM Coding", 100)
     _provider_health_scores.setdefault("OpenRouter", 100)
     _provider_health_scores.setdefault("Pollinations", 100)
 
     raw_providers = [
         ("Gemini", _gemini_available() and _provider_available("Gemini"), lambda: ask_gemini(user_message)),
         ("Groq", bool(GROQ_API_KEY), lambda: ask_groq(user_message, combined_results)),
-        ("NVIDIA NIM Tier 5", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_tier5(user_message, combined_results)),
-        ("NVIDIA NIM Tier 6", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_tier6(user_message, combined_results)),
+        ("NIM Fast", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_fast(user_message, combined_results)),
+        ("NIM Coding", bool(NVIDIA_NEMOTRON_API_KEY), lambda: ask_nim_coding(user_message, combined_results)),
         ("OpenRouter", bool(OPENROUTER_API_KEY), lambda: ask_openrouter(user_message, combined_results)),
         ("Pollinations", True, lambda: ask_pollinations(user_message, combined_results)),
     ]
 
-    # Filter available, then sort by health descending
+    # Filter available, then sort: policy ordering (2A.3) or health descending
     available = [(n, a, f, _provider_health_scores.get(n, 100)) for n, a, f in raw_providers if a]
-    available.sort(key=lambda x: x[3], reverse=True)
+    if JARVIS_ROUTER_POLICY:
+        try:
+            from routing_policy import score_candidates
+
+            policy_cands = [
+                {
+                    "provider": _PROVIDER_KEY_BY_DISPLAY.get(n, n),
+                    "health": h,
+                    "latency_ms": _observed_latency_ms(n),
+                    "available": True,
+                }
+                for n, _a, _f, h in available
+            ]
+            ordered = score_candidates(intent, policy_cands)
+            rank = {e["provider"]: i for i, e in enumerate(ordered)}
+            available.sort(key=lambda x: rank.get(_PROVIDER_KEY_BY_DISPLAY.get(x[0], x[0]), 999))
+            _log_policy_decision(intent, ordered)
+        except Exception as e:
+            _debug(f"[Router] policy fallback ordering failed, health sort: {e}")
+            available.sort(key=lambda x: x[3], reverse=True)
+    else:
+        available.sort(key=lambda x: x[3], reverse=True)
+
+    log_decision(
+        phase="act",
+        decision="fallback_chain_prepared",
+        decision_source="routing_policy" if JARVIS_ROUTER_POLICY else "health_sorted_providers",
+        measurable_inputs={"providers": [(n, h) for n, _, _, h in available]},
+    )
 
     _failed_providers = []
     for provider_name, _is_available, fn, health in available:
         if not _provider_available(provider_name):
+            log_decision(
+                phase="act",
+                decision="provider_skipped",
+                decision_source="_provider_available",
+                measurable_inputs={"provider": provider_name, "reason": "backoff/disabled"},
+                outcome="skipped",
+            )
             _debug(f"Skipping {provider_name} (backoff/disabled)")
             continue
         if health < 30:
+            log_decision(
+                phase="act",
+                decision="provider_skipped",
+                decision_source="health_threshold",
+                measurable_inputs={"provider": provider_name, "health": health},
+                outcome="skipped",
+            )
             _debug(f"Skipping {provider_name} (low health: {health})")
             continue
+        log_decision(
+            phase="act",
+            decision="fallback_provider_attempted",
+            decision_source="health_sorted_fallback",
+            measurable_inputs={"provider": provider_name, "health": health},
+        )
         _debug(f"Using {provider_name} fallback (health={health})...")
         try:
             reply = _retry(fn, max_retries=2)
             _last_provider_used = provider_name.lower().replace(" ", "_")
             _record_provider_success(provider_name)
+            log_decision(
+                phase="act",
+                decision="fallback_provider_succeeded",
+                decision_source=provider_name,
+                measurable_inputs={"provider": provider_name},
+                outcome="success",
+                latency_ms=0,
+            )
             return reply
         except Exception as e:
+            log_decision(
+                phase="act",
+                decision="fallback_provider_failed",
+                decision_source=provider_name,
+                measurable_inputs={"provider": provider_name, "error": str(e)},
+                outcome="failure",
+            )
             _debug(f"{provider_name} fallback failed: {e}")
             _handle_provider_failure(provider_name, e)
             _failed_providers.append(f"{provider_name}: {e}")
@@ -3258,17 +4324,51 @@ def ask_with_tools(user_message: str) -> str:
     # ── Last resort: on-device NN provider (never raises, works fully offline) ──
     if not JARVIS_MOCK_PROVIDERS:
         try:
+            log_decision(
+                phase="act",
+                decision="local_nn_attempted",
+                decision_source="_local_intent_predict",
+                measurable_inputs={},
+            )
             _local_offline_intent, _local_offline_conf = _local_intent_predict(user_message)
             reply = ask_local_offline(user_message, combined_results)
             _last_provider_used = "local_nn"
+            log_decision(
+                phase="act",
+                decision="local_nn_succeeded",
+                decision_source="ask_local_offline",
+                measurable_inputs={"intent": _local_offline_intent, "confidence": _local_offline_conf},
+                outcome="success",
+            )
             _debug(f"[Local NN] Offline reply (intent={_local_offline_intent}, conf={_local_offline_conf:.2f})")
             return reply
         except Exception as e:
+            log_decision(
+                phase="act",
+                decision="local_nn_failed",
+                decision_source="ask_local_offline",
+                measurable_inputs={"error": str(e)},
+                outcome="failure",
+            )
             _debug(f"[Local NN] Offline provider failed: {e}")
 
     if _failed_providers:
+        log_decision(
+            phase="act",
+            decision="all_providers_failed",
+            decision_source="fallback_chain_exhausted",
+            measurable_inputs={"failed_providers": _failed_providers, "count": len(_failed_providers)},
+            outcome="failure",
+        )
         details = "; ".join(_failed_providers)
         return f"All configured AI providers are currently unavailable. Provider errors: {details}. Please try again shortly."
+    log_decision(
+        phase="act",
+        decision="all_providers_unavailable",
+        decision_source="no_available_providers",
+        measurable_inputs={},
+        outcome="failure",
+    )
     return "All configured AI providers are currently unavailable. Please try again shortly."
 
 
@@ -3427,7 +4527,7 @@ def _summarize_with_gemini(history: str) -> str:
 def _summarize_paste(content: str, max_chars: int = 2000) -> str:
     """Summarize pasted content for context preservation.
 
-    Uses local LLM (Nemotron/DeepSeek) if available, falls back to extractive summary.
+    Uses local LLM (Nemotron/NIM) if available, falls back to extractive summary.
     Returns a brief summary that captures the essence of the pasted content.
     """
     if not content or len(content) <= max_chars:
@@ -3495,12 +4595,19 @@ def process(text):
     global _turn_memo_cache, _current_request_id
     _turn_memo_cache = {}
     _tool_call_names.clear()
-    _current_request_id = generate_request_id()
+    _current_request_id = new_request_id()
     _start_time = time.time()
     # Clear intent cache for new turn
     conversation_context.intent_cache.clear()
     text = _sanitize_user_message(text)
     t = text.lower()
+
+    log_decision(
+        phase="understand",
+        decision="process_start",
+        decision_source="process",
+        measurable_inputs={"user_message_len": len(text)},
+    )
 
     # Imperative command routing: for "open X" / "launch X" / "start X", help model pick right tool
     imperative_verbs = ("open ", "launch ", "start ", "run ", "quit ", "close ", "kill ")
@@ -3754,7 +4861,12 @@ def process(text):
             _found_verbs.add(word)
     _has_conjunction = re.search(r"\band\b|\bthen\b|\balso\b", t)
     if len(_found_verbs) >= 2 and _has_conjunction:
-        _debug(f"[Router] Compound request detected ({_found_verbs}) — routing to planner")
+        log_decision(
+            phase="plan",
+            decision="route_to_planner",
+            decision_source="compound_request_detector",
+            measurable_inputs={"verbs": list(_found_verbs), "has_conjunction": True},
+        )
         try:
             from tts import speak as _speak_status
 
@@ -3770,6 +4882,12 @@ def process(text):
             _debug(f"Planner loop for compound request failed: {e}, falling through")
 
     if needs_planner(text):
+        log_decision(
+            phase="plan",
+            decision="route_to_planner",
+            decision_source="needs_planner_heuristic",
+            measurable_inputs={"text_preview": text[:100]},
+        )
         try:
             from tts import speak as _speak_status
 
@@ -3798,6 +4916,12 @@ def process(text):
                 _debug(f"Agent loop failed: {e2}, falling back")
                 reply = ask_with_tools(text)
     elif needs_agent_loop(text):
+        log_decision(
+            phase="plan",
+            decision="route_to_agent",
+            decision_source="needs_agent_loop_heuristic",
+            measurable_inputs={"text_preview": text[:100]},
+        )
         try:
             from tts import speak as _speak_status
 
@@ -3814,6 +4938,12 @@ def process(text):
             _debug(f"Agent loop failed: {e}, falling back")
             reply = ask_with_tools(text)
     else:
+        log_decision(
+            phase="plan",
+            decision="route_to_direct",
+            decision_source="no_planner_agent_trigger",
+            measurable_inputs={},
+        )
         reply = ask_with_tools(text)
 
     conversation.append({"role": "user", "content": text})
@@ -3915,6 +5045,22 @@ def process(text):
     except Exception:
         pass
 
+    log_decision(
+        phase="respond",
+        decision="final_response",
+        decision_source="process",
+        measurable_inputs={
+            "provider": _last_provider_used,
+            "model": _last_model_used,
+            "tools_used": _tool_calls_log,
+            "intent": _intent,
+            "response_len": len(reply),
+            "latency_seconds": round(time.time() - _start_time, 3),
+        },
+        outcome="success",
+        latency_ms=int((time.time() - _start_time) * 1000),
+    )
+    
     return reply
 
 

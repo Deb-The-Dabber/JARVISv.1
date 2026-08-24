@@ -2,10 +2,15 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 import pytest
 import requests
+
+# Standalone script (run: python tests/test_session_permission.py), not a pytest
+# module — its `test_result` helper is mis-collected as a test otherwise.
+collect_ignore = ["test_session_permission.py"]
 
 # Freeze brain's import-time env before ANY test module imports it. Without
 # this, the first file to import brain (collection order is randomized by
@@ -17,13 +22,38 @@ os.environ.setdefault("JARVIS_LLM_FIRST", "0")
 # brain's import-time thresholds dict matches regardless of collection order.
 os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE", "0.85")
 os.environ.setdefault("JARVIS_LOCAL_INTENT_CONFIDENCE_CHAT", "0.80")
+# Embeddings: pin local MiniLM for CI/offline determinism. The live memory +
+# RAG indexes are Nemo 2048-dim, but only tests/test_rag.py follows the .env
+# mode (it re-sources JARVIS_EMBEDDING itself before importing rag_memory —
+# see its module header); everything else must stay offline and deterministic.
+os.environ.setdefault("JARVIS_EMBEDDING", "local")
+# Isolate persisted provider health (circuit breaker / backoff) from the real
+# ~/.jarvis/provider_health.json. Without this, a real-world outage (or an
+# earlier failing test run) leaves circuits open that make provider-fallback
+# tests skip Nemotron/Gemini deterministically and fail.
+os.environ.setdefault(
+    "JARVIS_PROVIDER_HEALTH_FILE",
+    os.path.join(tempfile.gettempdir(), "jarvis_test_provider_health.json"),
+)
+# Same for the Gemini daily-usage counter — the real file's quota state would
+# otherwise disable Gemini for every test server mid-suite.
+os.environ.setdefault(
+    "JARVIS_GEMINI_USAGE_FILE",
+    os.path.join(tempfile.gettempdir(), "jarvis_test_gemini_usage.json"),
+)
+_TEST_ISOLATION_NS = f"{os.getpid()}_{int(time.time())}"
 
 
-def _free_port(port: int = 8000):
-    """Kill any process listening on the given port."""
+def _free_port(port: int = 8002):
+    """Kill any process LISTENING on the given port.
+
+    -sTCP:LISTEN is essential: plain `lsof -ti :port` also matches OWN
+    outbound/TIME_WAIT sockets (e.g. pytest's own requests to the port),
+    which would SIGKILL the test process itself.
+    """
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
+            ["lsof", "-nP", "-iTCP", f":{port}", "-sTCP:LISTEN"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -52,12 +82,17 @@ def _stop_proc(proc: subprocess.Popen):
 
 @pytest.fixture(scope="session")
 def jarvis_server():
-    _free_port(8000)
+    _free_port(8002)
     env = os.environ.copy()
     env["JARVIS_TTS_SILENT"] = "1"
-    # Eval mode: auto-confirm tools so regression tests exercise routing, not the
-    # interactive sandbox (sandbox behavior has its own dedicated unit tests).
     env["JARVIS_EVAL_MODE"] = "1"
+    env["JARVIS_PORT"] = "8002"
+    env["JARVIS_PROVIDER_HEALTH_FILE"] = os.path.join(
+        tempfile.gettempdir(), f"jarvis_test_health_{_TEST_ISOLATION_NS}.json"
+    )
+    env["JARVIS_GEMINI_USAGE_FILE"] = os.path.join(
+        tempfile.gettempdir(), f"jarvis_test_gemini_{_TEST_ISOLATION_NS}.json"
+    )
     proc = subprocess.Popen(
         ["python", "server.py"],
         env=env,
@@ -66,7 +101,7 @@ def jarvis_server():
     )
     for _ in range(60):
         try:
-            r = requests.get("http://localhost:8000/health", timeout=2)
+            r = requests.get("http://localhost:8002/health", timeout=2)
             if r.status_code == 200:
                 break
         except Exception:
@@ -75,7 +110,7 @@ def jarvis_server():
     else:
         _stop_proc(proc)
         raise RuntimeError("Server failed to start within 60s")
-    yield "http://localhost:8000"
+    yield "http://localhost:8002"
     _stop_proc(proc)
 
 
@@ -105,7 +140,11 @@ def api(jarvis_server):
 
 @pytest.fixture
 def has_display():
-    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or (sys.platform == "darwin" and os.environ.get("TERM_PROGRAM")))
+    return bool(
+        os.environ.get("DISPLAY")
+        or os.environ.get("WAYLAND_DISPLAY")
+        or (sys.platform == "darwin" and os.environ.get("TERM_PROGRAM"))
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -146,7 +185,18 @@ def mock_provider_server():
         env.setdefault(key, "mock-key")
 
     proc = subprocess.Popen(
-        ["python", "-m", "uvicorn", "tests.mock_provider:app", "--host", "127.0.0.1", "--port", str(mock_port), "--log-level", "warning"],
+        [
+            "python",
+            "-m",
+            "uvicorn",
+            "tests.mock_provider:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(mock_port),
+            "--log-level",
+            "warning",
+        ],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -212,6 +262,17 @@ def mock_api(mock_provider_server):
     env = os.environ.copy()
     env["JARVIS_TTS_SILENT"] = "1"
     env["JARVIS_MOCK_PROVIDERS"] = "1"
+    env["JARVIS_PORT"] = "8002"
+    # Same port hygiene as jarvis_server: a previous test's server may still
+    # be shutting down (or an unrelated process may hold :8002) — probe it
+    # before spawning, or this test would silently talk to the stale one.
+    _free_port(8002)
+    env["JARVIS_PROVIDER_HEALTH_FILE"] = os.path.join(
+        tempfile.gettempdir(), f"jarvis_test_health_{_TEST_ISOLATION_NS}_{time.time_ns()}.json"
+    )
+    env["JARVIS_GEMINI_USAGE_FILE"] = os.path.join(
+        tempfile.gettempdir(), f"jarvis_test_gemini_{_TEST_ISOLATION_NS}_{time.time_ns()}.json"
+    )
     env["MOCK_PROVIDER_URL"] = f"http://127.0.0.1:{mock_port}"
     for key in [
         "NVIDIA_NEMOTRON_API_KEY",
@@ -221,6 +282,7 @@ def mock_api(mock_provider_server):
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
         "KIMI_API_KEY",
+        "GOOGLE_GENAI_API_KEY",
         "TAVILY_API_KEY",
         "ELEVENLABS_API_KEY",
     ]:
@@ -234,7 +296,7 @@ def mock_api(mock_provider_server):
     )
     for _ in range(60):
         try:
-            r = requests.get("http://localhost:8000/health", timeout=2)
+            r = requests.get("http://localhost:8002/health", timeout=2)
             if r.status_code == 200:
                 break
         except Exception:
@@ -243,19 +305,24 @@ def mock_api(mock_provider_server):
     else:
         _stop_proc(proc)
         raise RuntimeError("Server failed to start within 60s")
+    if proc.poll() is not None:
+        _stop_proc(proc)
+        raise RuntimeError(
+            "Server process exited during startup — check for a port 8002 conflict"
+        )
 
     session = requests.Session()
 
     class MockAPI:
         def ask(self, text: str, timeout=180):
             return session.post(
-                "http://localhost:8000/ask",
+                "http://localhost:8002/ask",
                 json={"text": text},
                 timeout=timeout,
             )
 
         def get(self, endpoint: str):
-            return session.get(f"http://localhost:8000{endpoint}", timeout=30)
+            return session.get(f"http://localhost:8002{endpoint}", timeout=30)
 
         def close(self):
             session.close()

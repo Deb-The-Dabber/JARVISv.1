@@ -7,7 +7,7 @@
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="${BASE_DIR}/.jsf_pids"
-BACKEND_PORT=8000
+BACKEND_PORT=8002
 FRONTEND_PORT=5137
 
 listener_pid() {
@@ -25,7 +25,7 @@ start() {
   else
     pushd "$BASE_DIR" >/dev/null || exit 1
     source venv/bin/activate
-    nohup python server.py >/tmp/jarvis_server.log 2>&1 < /dev/null &
+    JARVIS_PORT=$BACKEND_PORT nohup python server.py >/tmp/jarvis_server.log 2>&1 < /dev/null &
     backend_pid=$!
     popd >/dev/null || exit 1
     echo "  Backend started (PID $backend_pid, log: /tmp/jarvis_server.log)"
@@ -46,7 +46,7 @@ start() {
   echo "${backend_pid} ${frontend_pid}" > "${PID_FILE}"
   echo ""
   echo "Jarvis webapp ready:"
-  echo "  - Backend:  http://localhost:8000"
+  echo "  - Backend:  http://localhost:${BACKEND_PORT}"
   echo "  - Frontend: http://localhost:5137"
 }
 

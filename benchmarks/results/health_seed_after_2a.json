@@ -1,0 +1,23 @@
+{
+  "Gemini": {
+    "total": 1,
+    "successes": 0,
+    "failures": 1,
+    "avg_latency": 0.0,
+    "last_success": null,
+    "last_failure": "2026-08-11T14:54:47.217514",
+    "circuit_open": true,
+    "health_score": 90,
+    "circuit_open_until": 1786479287.217798
+  },
+  "Nemotron Ultra": {
+    "total": 1,
+    "successes": 1,
+    "failures": 0,
+    "avg_latency": 0.0,
+    "last_success": "2026-08-11T14:55:04.456262",
+    "last_failure": null,
+    "circuit_open": false,
+    "health_score": 100
+  }
+}

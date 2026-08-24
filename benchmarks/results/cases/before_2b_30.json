@@ -1,0 +1,44 @@
+{
+  "case": {
+    "prompt": "Hi! What can you help me with today? Give me a quick summary of your abilities.",
+    "expected_intent": "chat",
+    "expected_fine_intent": "ask_capabilities",
+    "expected_provider_class": "cheap",
+    "max_latency": 180
+  },
+  "result": {
+    "prompt": "Hi! What can you help me with today? Give me a quick summary of your abilities.",
+    "intent": "chat",
+    "expected_intent": "chat",
+    "intent_accuracy": 1.0,
+    "fine_intent": "ask_capabilities",
+    "expected_provider_class": "cheap",
+    "final_provider": "nemotron_ultra",
+    "provider_class_match": false,
+    "tools_called": [
+      "explain_capability"
+    ],
+    "tool_accuracy": 1.0,
+    "keyword_recall": 0.0,
+    "intent_latency_ms": 6966.6,
+    "routing_latency_ms": 7165.7,
+    "total_latency_ms": 18010.2,
+    "max_latency_s": 180,
+    "latency_ok": true,
+    "providers_attempted": [],
+    "fallback_count": 0,
+    "cost": {
+      "tokens_input_total": 0,
+      "tokens_output_total": 0,
+      "cost_usd_total": 0.002582
+    },
+    "passed": true,
+    "reply_preview": "I'm a local AI assistant with 176 tools. Here's what I can help with:\n\n**System & Productivity**\n- Monitor CPU, RAM, disk, battery, top processes\n- Open/quit/fo",
+    "request_id": "9f7370ae-684",
+    "classifier_path": "local_nn",
+    "classifier_confidence": 0.961,
+    "classifier_raw": null,
+    "fine_intent_actual": "ask_capabilities",
+    "fine_confidence_actual": 0.33422378251130935
+  }
+}

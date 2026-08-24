@@ -35,9 +35,14 @@ def keep_count() -> int:
 
 def _sources() -> list[tuple[str, str]]:
     """Return (label, path) pairs; missing paths are skipped at runtime."""
+    try:
+        from rag_memory import RAG_DB_PATH
+    except Exception:
+        RAG_DB_PATH = ""
     return [
         ("watchlog.db", watchlog.DB_PATH),
         ("vector_db", VECTOR_DB_PATH),
+        ("rag_db", RAG_DB_PATH),
         ("nn_weights", WEIGHTS_DIR),
         ("self_test", SELF_TEST_DIR),
         ("cost_daily.jsonl", COST_FILE),

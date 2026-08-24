@@ -1,0 +1,48 @@
+{
+  "case": {
+    "prompt": "Write a script that finds duplicate files by content hash in a given directory.",
+    "expected_intent": "coding",
+    "expected_fine_intent": "write_script",
+    "expected_keywords": [
+      "hash",
+      "script"
+    ],
+    "max_latency": 180
+  },
+  "result": {
+    "prompt": "Write a script that finds duplicate files by content hash in a given directory.",
+    "intent": "coding",
+    "expected_intent": "coding",
+    "intent_accuracy": 1.0,
+    "fine_intent": "write_script",
+    "expected_provider_class": "",
+    "final_provider": "local_nn",
+    "provider_class_match": null,
+    "tools_called": [
+      "create_file",
+      "run_python"
+    ],
+    "tool_accuracy": 1.0,
+    "keyword_recall": 0.5,
+    "intent_latency_ms": 25086.4,
+    "routing_latency_ms": 42074.4,
+    "total_latency_ms": 156368.7,
+    "max_latency_s": 180,
+    "latency_ok": true,
+    "providers_attempted": [],
+    "fallback_count": 0,
+    "cost": {
+      "tokens_input_total": 0,
+      "tokens_output_total": 0,
+      "cost_usd_total": 0.0
+    },
+    "passed": true,
+    "reply_preview": "I'm currently offline (all cloud providers unreachable), but I found this locally for you:\n\n- create_file:[('content', '#!/usr/bin/env python3\\n\"\"\"\\nFind duplic",
+    "request_id": "ccfe6596-123",
+    "classifier_path": "nemotron",
+    "classifier_confidence": null,
+    "classifier_raw": null,
+    "fine_intent_actual": null,
+    "fine_confidence_actual": 0.0
+  }
+}

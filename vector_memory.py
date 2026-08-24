@@ -1,14 +1,28 @@
 import datetime
 import hashlib
+import json
 import os
 import shutil
 import threading
+import time
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+try:
+    from config import JARVIS_EMBEDDING, JARVIS_EMBED_BATCH, JARVIS_EMBED_MAX_CHARS  # noqa: I001
+except Exception:
+    JARVIS_EMBEDDING = os.getenv("JARVIS_EMBEDDING", "nemo").lower().strip()
+    JARVIS_EMBED_BATCH = int(os.getenv("JARVIS_EMBED_BATCH", "64"))
+    JARVIS_EMBED_MAX_CHARS = int(os.getenv("JARVIS_EMBED_MAX_CHARS", "6000"))
+
 VECTOR_DB_PATH = os.path.join(os.path.expanduser("~"), "jarvis_vector_db")
+
+EMBEDDING_URL = "https://integrate.api.nvidia.com/v1/embeddings"
+NEMO_EMBED_MODEL = "nvidia/nemotron-3-embed-1b"
+EMBED_CACHE_MAX = 2048
+EMBED_BACKUP_ROOT = os.path.join(os.path.expanduser("~"), ".jarvis", "embeddings_backup")
 
 _client = None
 _collection = None
@@ -19,27 +33,125 @@ _local_embedding_model = None
 _embedding_failed = False
 _repopulated = False
 _repopulate_done = threading.Event()
+_http_client = None
+_embed_lru: dict[str, list] = {}
+
+
+def _disable_tqdm_mp_lock() -> None:
+    """Prevent tqdm from creating a multiprocessing.RLock for its write lock.
+
+    tqdm's progress bar (e.g. MiniLM "Loading weights" bar) calls
+    multiprocessing.RLock() at first render. That spawns the multiprocessing
+    resource_tracker daemon, which can hang at interpreter exit on macOS
+    (holds the inherited stderr pipe open -> process appears hung, with a
+    "leaked semaphore objects" warning). The threading lock alone is
+    sufficient for our single-process use.
+    """
+    try:
+        import tqdm.std
+
+        tqdm.std.TqdmDefaultWriteLock.mp_lock = None
+    except Exception:
+        pass
+
+
+def _get_http_client():
+    """Return the single persistent HTTP client for embeddings.
+
+    Never create/close a client per request (macOS ENOBUFS): one keep-alive
+    client is shared for the process lifetime.
+    """
+    global _http_client
+    if _http_client is None:
+        import httpx
+
+        _http_client = httpx.Client(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
+        )
+    return _http_client
+
+
+def _remote_embed(texts: list[str]) -> list:
+    """Embed texts via NVIDIA NIM nemotron-3-embed-1b (2048-dim)."""
+    import httpx
+
+    key = (os.getenv("NVIDIA_NEMOTRON_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("NVIDIA_NEMOTRON_API_KEY not set for embeddings")
+    client = _get_http_client()
+    out: list = []
+    for start in range(0, len(texts), JARVIS_EMBED_BATCH):
+        batch = [t[:JARVIS_EMBED_MAX_CHARS] for t in texts[start : start + JARVIS_EMBED_BATCH]]
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                r = client.post(
+                    EMBEDDING_URL,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"model": NEMO_EMBED_MODEL, "input": batch},
+                )
+                if r.status_code == 200:
+                    data = sorted(r.json()["data"], key=lambda v: v["index"])
+                    out.extend(d["embedding"] for d in data)
+                    break
+                last_err = RuntimeError(f"embedding HTTP {r.status_code}: {r.text[:120]}")
+                if r.status_code in (429, 500, 502, 503, 504):
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise last_err
+            except httpx.HTTPError as e:
+                last_err = e
+                time.sleep(1.0 + attempt)
+        else:
+            raise last_err or RuntimeError("embedding request failed")
+    return out
+
+
+def _cached_embed(text: str) -> list:
+    """Remote embed with a small in-memory LRU (repeated queries are free)."""
+    h = hashlib.md5(text.encode("utf-8")).hexdigest()
+    vec = _embed_lru.get(h)
+    if vec is not None:
+        return vec
+    vec = _remote_embed([text])[0]
+    if len(_embed_lru) >= EMBED_CACHE_MAX:
+        _embed_lru.clear()
+    _embed_lru[h] = vec
+    return vec
 
 
 def _get_embedding(text: str) -> list:
-    """Get embedding using local all-MiniLM-L6-v2 (Phase 2.2: MiniLM-only)."""
+    """Get embedding using the configured backend (nemotron-3-embed-1b or local MiniLM)."""
     global _embedding_mode_printed, _local_embedding_model, _embedding_failed
 
     if _embedding_failed:
         raise RuntimeError("Embedding service unavailable")
 
     try:
-        if _local_embedding_model is None:
-            from sentence_transformers import SentenceTransformer
-
-            _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        if JARVIS_EMBEDDING == "local":
+            return _local_embed(text)
         if not _embedding_mode_printed:
-            print("  Embeddings: all-MiniLM-L6-v2 (384-dim)")
+            print(f"  Embeddings: {NEMO_EMBED_MODEL} (2048-dim, remote)")
             _embedding_mode_printed = True
-        return _local_embedding_model.encode(text).tolist()
+        return _cached_embed(text)
     except Exception as e:
         _embedding_failed = True
         raise RuntimeError(f"Embedding service unavailable: {e}")
+
+
+def _local_embed(text: str) -> list:
+    """Local all-MiniLM-L6-v2 path (384-dim), used for offline/CI and the NN router core."""
+    global _embedding_mode_printed, _local_embedding_model
+    if _local_embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+
+        _disable_tqdm_mp_lock()
+        _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    if not _embedding_mode_printed:
+        print("  Embeddings: all-MiniLM-L6-v2 (384-dim)")
+        _embedding_mode_printed = True
+    return _local_embedding_model.encode(text).tolist()
 
 
 class JarvisEmbeddingFunction:
@@ -50,20 +162,35 @@ class JarvisEmbeddingFunction:
         return "jarvis_embedding"
 
     def __call__(self, input):
-        """Embed a list of texts using the new embedding service."""
+        """Embed a list of texts using the new embedding service (batched remote)."""
         texts = list(input)
-        embeddings = []
-        for text in texts:
-            try:
-                embedding = _get_embedding(text)
-                embeddings.append(embedding)
-            except Exception:
-                raise
-        return embeddings
+        if not texts:
+            return []
+        if JARVIS_EMBEDDING == "local":
+            return [_get_embedding(t) for t in texts]
+        out: list[tuple[int, list]] = []
+        todo: list[tuple[int, str]] = []
+        for i, t in enumerate(texts):
+            h = hashlib.md5(t.encode("utf-8")).hexdigest()
+            v = _embed_lru.get(h)
+            if v is not None:
+                out.append((i, v))
+            else:
+                todo.append((i, t))
+        if todo:
+            vecs = _remote_embed([t for _, t in todo])
+            for (i, t), v in zip(todo, vecs):
+                h = hashlib.md5(t.encode("utf-8")).hexdigest()
+                if len(_embed_lru) >= EMBED_CACHE_MAX:
+                    _embed_lru.clear()
+                _embed_lru[h] = v
+                out.append((i, v))
+        out.sort(key=lambda x: x[0])
+        return [v for _, v in out]
 
 
 COLLECTION_NAME = "jarvis_mini"
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL_NAME = NEMO_EMBED_MODEL if JARVIS_EMBEDDING == "nemo" else "all-MiniLM-L6-v2"
 
 
 def _current_embedding_name() -> str:
@@ -80,6 +207,23 @@ def _should_reset_collection(error: Exception) -> bool:
         or "embedding function conflict" in msg
         or "no such table" in msg
     )
+
+
+def _defer_migration(reason: str):
+    """Log that a migration is needed without performing any destructive action.
+
+    Importing vector_memory must never delete/recreate/migrate a collection
+    implicitly (background threads / smoke tests / module init included).
+    Deferred migrations are done explicitly via scripts/migrate_embeddings.py.
+    """
+    try:
+        os.makedirs(EMBED_BACKUP_ROOT, exist_ok=True)
+        with open(os.path.join(EMBED_BACKUP_ROOT, "deferred_migration.log"), "a") as fh:
+            fh.write(f"[{datetime.datetime.now().isoformat()}] {reason}\n")
+    except Exception:
+        pass
+    print(f"  [Migration deferred] {reason}")
+    print("  Run explicitly: python scripts/migrate_embeddings.py --mode nemo|local --yes")
 
 
 def _export_collection_data(col):
@@ -141,6 +285,35 @@ def _export_collection_data(col):
             return []
 
 
+def _snapshot_collection(old_collection, old_data: list) -> str:
+    """Copy the old index dir + export.jsonl before migration, for immediate rollback."""
+    try:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        old_model = "unknown"
+        try:
+            if old_collection is not None and old_collection.metadata:
+                old_model = old_collection.metadata.get("embedding_model", "unknown") or "unknown"
+        except Exception:
+            pass
+        dest = os.path.join(EMBED_BACKUP_ROOT, f"{old_model.replace('/', '_')}_{ts}")
+        os.makedirs(dest, exist_ok=True)
+        if os.path.isdir(VECTOR_DB_PATH):
+            shutil.copytree(VECTOR_DB_PATH, os.path.join(dest, "vector_db"), dirs_exist_ok=True)
+        with open(os.path.join(dest, "snapshot.jsonl"), "w") as fh:
+            for item in old_data:
+                fh.write(
+                    json.dumps(
+                        {"id": item["id"], "document": item["document"], "metadata": item["metadata"]}
+                    )
+                    + "\n"
+                )
+        print(f"  Pre-migration snapshot: {dest} ({len(old_data)} entries)")
+        return dest
+    except Exception as e:
+        print(f"  Snapshot warning (proceeding without backup): {e}")
+        return ""
+
+
 def _reset_collection():
     global _client, _collection, _embedding_function
 
@@ -156,6 +329,7 @@ def _reset_collection():
             old_data = _export_collection_data(old_collection)
         except Exception:
             old_data = []
+    _snapshot_collection(old_collection, old_data)
 
     try:
         if _client is not None:
@@ -176,19 +350,26 @@ def _reset_collection():
 
     if old_data:
         migrated = 0
-        for item in old_data:
+        for start in range(0, len(old_data), JARVIS_EMBED_BATCH):
+            items = old_data[start : start + JARVIS_EMBED_BATCH]
             try:
-                doc = item["document"]
-                meta = item["metadata"]
-                doc_id = item["id"]
                 new_col.add(
-                    documents=[doc],
-                    metadatas=[meta],
-                    ids=[doc_id],
+                    documents=[item["document"] for item in items],
+                    metadatas=[item["metadata"] for item in items],
+                    ids=[item["id"] for item in items],
                 )
-                migrated += 1
+                migrated += len(items)
             except Exception:
-                pass
+                for item in items:
+                    try:
+                        new_col.add(
+                            documents=[item["document"]],
+                            metadatas=[item["metadata"]],
+                            ids=[item["id"]],
+                        )
+                        migrated += 1
+                    except Exception:
+                        pass
         print(f"  Migrated {migrated}/{len(old_data)} entries to new embedding model.")
     return new_col
 
@@ -220,28 +401,22 @@ def _get_collection():
 
         expected_model = _current_embedding_name()
 
-        for attempt in range(2):
-            try:
-                _collection = _client.get_or_create_collection(
-                    name=COLLECTION_NAME,
-                    metadata={"hnsw:space": "cosine", "embedding_model": expected_model},
-                    embedding_function=_embedding_function,
+        try:
+            _collection = _client.get_or_create_collection(
+                name=COLLECTION_NAME,
+                metadata={"hnsw:space": "cosine", "embedding_model": expected_model},
+                embedding_function=_embedding_function,
+            )
+            actual_model = _collection.metadata.get("embedding_model", "") if _collection.metadata else ""
+            if actual_model and actual_model != expected_model:
+                _defer_migration(
+                    f"index is '{actual_model}', runtime expects '{expected_model}' "
+                    f"(JARVIS_EMBEDDING={JARVIS_EMBEDDING})."
                 )
-                actual_model = _collection.metadata.get("embedding_model", "") if _collection.metadata else ""
-                if actual_model and actual_model != expected_model:
-                    print(f"  Embedding model changed ({actual_model} -> {expected_model}). Migrating...")
-                    _collection = _reset_collection()
-                break
-            except Exception as e:
-                if _should_reset_collection(e):
-                    print("  Vector memory DB corrupted, dropping and recreating.")
-                    _collection = _drop_and_reopen()
-                else:
-                    if attempt == 0 and "no such table" in str(e).lower():
-                        print("  Vector memory DB has missing tables, dropping and recreating.")
-                        _drop_and_reopen()
-                        continue
-                    raise
+        except Exception as e:
+            if _should_reset_collection(e):
+                _defer_migration(f"collection access issue: {e}. Not auto-recreating.")
+            raise
         count = _collection.count()
         if count == 0 and not _repopulated:
             repopulate_from_sqlite()
@@ -261,7 +436,6 @@ def _embed(texts: list[str]) -> list:
 
 def add_to_vector_memory(content: str, category: str = "memory", metadata: dict = None):
     """Add any text to vector memory."""
-    attempt_reset = False
     try:
         col = _get_collection()
         doc_id = f"{category}_{datetime.datetime.now().timestamp()}"
@@ -275,11 +449,11 @@ def add_to_vector_memory(content: str, category: str = "memory", metadata: dict 
         col.add(documents=[content], embeddings=[embedding], metadatas=[meta], ids=[doc_id])
         return True
     except Exception as e:
-        if not attempt_reset and _should_reset_collection(e):
-            attempt_reset = True
-            print("  Vector memory embedding dimension mismatch detected during add, recreating collection.")
-            _reset_collection()
-            return add_to_vector_memory(content, category=category, metadata=metadata)
+        if _should_reset_collection(e):
+            _defer_migration(
+                f"add_to_vector_memory hit a mismatch ({e}); entry not added, no automatic reset."
+            )
+            return False
         print(f"  Vector memory add error: {e}")
         return False
 
@@ -322,8 +496,9 @@ def search_vector_memory(query: str, n_results: int = 5, category: str = None) -
         return output
     except Exception as e:
         if _should_reset_collection(e):
-            print("  Vector memory embedding dimension mismatch detected during search, recreating collection.")
-            _reset_collection()
+            _defer_migration(
+                f"search_vector_memory hit a mismatch ({e}); returning empty, no automatic reset."
+            )
             return []
         print(f"  Vector search error: {e}")
         return []
@@ -500,6 +675,7 @@ add = add_to_vector_memory
 search = search_vector_memory
 delete = delete_from_vector_memory
 build_semantic_context = build_semantic_context
+get_embedding = _get_embedding
 
 
 def _ensure_populated():
@@ -519,6 +695,7 @@ def prewarm_minilm():
     try:
         from sentence_transformers import SentenceTransformer
 
+        _disable_tqdm_mp_lock()
         _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
         if not _embedding_mode_printed:
             print("  Local embeddings: all-MiniLM-L6-v2 (pre-warmed)")
@@ -532,6 +709,7 @@ def get_local_embedding_model():
     if _local_embedding_model is None:
         from sentence_transformers import SentenceTransformer
 
+        _disable_tqdm_mp_lock()
         _local_embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _local_embedding_model
 

@@ -8,27 +8,34 @@ pytestmark = pytest.mark.integration
 
 
 class TestProviderFallbackChain:
-    """Verify the provider fallback chain behaves correctly."""
+    """Verify the provider fallback chain behaves correctly.
 
-    def test_nemotron_success(self, mock_provider, mock_api):
-        """Normal path — Nemotron Ultra primary handles the request."""
+    NOTE: since Phase 2A the default (non-policy) chain in brain.py is
+    Gemini -> Groq -> NIM Fast -> NIM Coding -> OpenRouter -> Pollinations;
+    Nemotron Ultra is only a primary in policy (JARVIS_ROUTER_POLICY=1) or
+    LLM-first (JARVIS_LLM_FIRST=1) mode, so the mock-mode fallback tests
+    exercise Groq (the first provider whose OpenAI-compatible path records
+    attempts on the mock).
+    """
+
+    def test_default_chain_success(self, mock_provider, mock_api):
+        """Normal path — chain head (Gemini) handles the request."""
         mock_provider.reset()
         r = mock_api.ask("weather in tokyo")
         assert r.status_code == 200
         data = r.json()
         assert "reply" in data
 
-    def test_fallback_to_gemini_on_nemotron_failure(self, mock_provider, mock_api):
-        """When Nemotron Ultra fails (500), fall through to Gemini (first fallback)."""
+    def test_fallback_to_groq_on_gemini_failure(self, mock_provider, mock_api):
+        """When Gemini fails (500), fall through to Groq."""
         mock_provider.reset()
-        mock_provider.fail("Nemotron Ultra", mode="500", duration=60)
+        mock_provider.fail("Gemini", mode="500", duration=60)
         r = mock_api.ask("weather in tokyo")
         assert r.status_code == 200
         data = r.json()
         assert "reply" in data
         called = mock_provider.called_providers
-        assert "Nemotron Ultra" in called
-        assert "Gemini" in called
+        assert "Groq" in called
 
     def test_all_providers_fail_graceful_error(self, mock_provider, mock_api):
         """When all providers fail, user gets a graceful error, not a crash."""
@@ -75,16 +82,19 @@ class TestProviderHealthScoring:
     def test_health_score_drops_on_failure(self, mock_provider, mock_api):
         """After a provider fails, its health score should drop."""
         mock_provider.reset()
-        initial = mock_provider.health("Nemotron Ultra")
+        initial = mock_provider.health("Groq")
         assert initial["health_score"] == 100
 
-        mock_provider.fail("Nemotron Ultra", mode="500", duration=60)
+        # Gemini (chain head) must fail too, or it answers and Groq is never
+        # attempted — the Gemini mock path doesn't record failed attempts.
+        mock_provider.fail("Gemini", mode="500", duration=60)
+        mock_provider.fail("Groq", mode="500", duration=60)
         r = mock_api.ask("weather", timeout=60)
         assert r.status_code == 200
 
         # Poll health until it drops (allow for retry timing)
         for _ in range(10):
-            after = mock_provider.health("Nemotron Ultra")
+            after = mock_provider.health("Groq")
             if after["health_score"] < 100:
                 break
             time.sleep(1)

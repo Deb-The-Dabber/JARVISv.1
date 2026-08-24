@@ -10,6 +10,10 @@ JARVIS_TTS_SILENT = os.getenv("JARVIS_TTS_SILENT", "0") == "1"
 JARVIS_FORCE_PROVIDER = os.getenv("JARVIS_FORCE_PROVIDER", "").lower()
 JARVIS_MOCK_PROVIDERS = os.getenv("JARVIS_MOCK_PROVIDERS", "0") == "1"
 
+JARVIS_EMBEDDING = os.getenv("JARVIS_EMBEDDING", "nemo").lower().strip()
+JARVIS_EMBED_BATCH = int(os.getenv("JARVIS_EMBED_BATCH", "64"))
+JARVIS_EMBED_MAX_CHARS = int(os.getenv("JARVIS_EMBED_MAX_CHARS", "6000"))
+
 USER_NAME = "Debasish"
 USER_CITY = "Aurora"
 USER_LAT = 41.7606
@@ -103,6 +107,13 @@ SAFETY_PENDING_TTL = int(os.getenv("SAFETY_PENDING_TTL", "86400"))  # 24h defaul
 MODEL_CONTEXT_LIMITS = {
     "nvidia/nemotron-3-ultra-550b-a55b": 8192,
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": 8192,
+    "nvidia/nemotron-3-super-120b-a12b": 32768,
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5": 32768,
+    "nvidia/nemotron-3-nano-30b-a3b": 32768,
+    "stepfun-ai/step-3.7-flash": 32768,
+    "minimaxai/minimax-m3": 32768,
+    "openai/gpt-oss-20b": 32768,
+    "deepseek-ai/deepseek-v4-flash-0731": 32768,
     "gemini-3.5-flash": 32768,
     "gemini-2.5-flash": 32768,
     "deepseek-ai/deepseek-v4-flash": 32768,
@@ -131,7 +142,7 @@ FACE_SIMILARITY_THRESHOLD = 0.85  # cosine similarity threshold for match
 # Gmail OAuth (Google Cloud Console → Credentials → OAuth 2.0 Client ID)
 GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID", "")
 GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET", "")
-GMAIL_REDIRECT_URI = os.getenv("GMAIL_REDIRECT_URI", "http://localhost:8000/oauth/callback/gmail")
+GMAIL_REDIRECT_URI = os.getenv("GMAIL_REDIRECT_URI", "http://localhost:8002/oauth/callback/gmail")
 GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
@@ -143,15 +154,15 @@ GMAIL_SCOPES = [
 # GitHub OAuth (GitHub Settings → Developer Settings → OAuth Apps)
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
-GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8000/oauth/callback/github")
+GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "http://localhost:8002/oauth/callback/github")
 GITHUB_SCOPES = ["repo", "read:user", "read:org", "user:email"]
 
-OAUTH_REDIRECT_BASE = os.getenv("OAUTH_REDIRECT_BASE", "http://localhost:8000")
+OAUTH_REDIRECT_BASE = os.getenv("OAUTH_REDIRECT_BASE", "http://localhost:8002")
 
 # Google Drive OAuth (.env: DRIVE_CLIENT_ID / DRIVE_CLIENT_SECRET)
 GOOGLE_DRIVE_CLIENT_ID = os.getenv("DRIVE_CLIENT_ID", os.getenv("GOOGLE_DRIVE_CLIENT_ID", ""))
 GOOGLE_DRIVE_CLIENT_SECRET = os.getenv("DRIVE_CLIENT_SECRET", os.getenv("GOOGLE_DRIVE_CLIENT_SECRET", ""))
-GOOGLE_DRIVE_REDIRECT_URI = os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-drive")
+GOOGLE_DRIVE_REDIRECT_URI = os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-drive")
 GOOGLE_DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/drive.file",
@@ -162,7 +173,7 @@ GOOGLE_DRIVE_SCOPES = [
 # Google Sheets OAuth (.env: SHEETS_CLIENT_ID / SHEETS_CLIENT_SECRET)
 GOOGLE_SHEETS_CLIENT_ID = os.getenv("SHEETS_CLIENT_ID", os.getenv("GOOGLE_SHEETS_CLIENT_ID", ""))
 GOOGLE_SHEETS_CLIENT_SECRET = os.getenv("SHEETS_CLIENT_SECRET", os.getenv("GOOGLE_SHEETS_CLIENT_SECRET", ""))
-GOOGLE_SHEETS_REDIRECT_URI = os.getenv("GOOGLE_SHEETS_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-sheets")
+GOOGLE_SHEETS_REDIRECT_URI = os.getenv("GOOGLE_SHEETS_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-sheets")
 GOOGLE_SHEETS_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/spreadsheets.readonly",
@@ -173,7 +184,7 @@ GOOGLE_SHEETS_SCOPES = [
 # Google Docs OAuth (.env: DOCS_CLIENT_ID / DOCS_CLIENT_SECRET)
 GOOGLE_DOCS_CLIENT_ID = os.getenv("DOCS_CLIENT_ID", os.getenv("GOOGLE_DOCS_CLIENT_ID", ""))
 GOOGLE_DOCS_CLIENT_SECRET = os.getenv("DOCS_CLIENT_SECRET", os.getenv("GOOGLE_DOCS_CLIENT_SECRET", ""))
-GOOGLE_DOCS_REDIRECT_URI = os.getenv("GOOGLE_DOCS_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-docs")
+GOOGLE_DOCS_REDIRECT_URI = os.getenv("GOOGLE_DOCS_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-docs")
 GOOGLE_DOCS_SCOPES = [
     "https://www.googleapis.com/auth/documents",
     "https://www.googleapis.com/auth/documents.readonly",
@@ -184,7 +195,7 @@ GOOGLE_DOCS_SCOPES = [
 # Google Slides OAuth (.env: SLIDES_CLIENT_ID / SLIDES_CLIENT_SECRET)
 GOOGLE_SLIDES_CLIENT_ID = os.getenv("SLIDES_CLIENT_ID", os.getenv("GOOGLE_SLIDES_CLIENT_ID", ""))
 GOOGLE_SLIDES_CLIENT_SECRET = os.getenv("SLIDES_CLIENT_SECRET", os.getenv("GOOGLE_SLIDES_CLIENT_SECRET", ""))
-GOOGLE_SLIDES_REDIRECT_URI = os.getenv("GOOGLE_SLIDES_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-slides")
+GOOGLE_SLIDES_REDIRECT_URI = os.getenv("GOOGLE_SLIDES_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-slides")
 GOOGLE_SLIDES_SCOPES = [
     "https://www.googleapis.com/auth/presentations",
     "https://www.googleapis.com/auth/presentations.readonly",
@@ -195,10 +206,20 @@ GOOGLE_SLIDES_SCOPES = [
 # Google Forms OAuth (.env: FORMS_CLIENT_ID / FORMS_CLIENT_SECRET)
 GOOGLE_FORMS_CLIENT_ID = os.getenv("FORMS_CLIENT_ID", os.getenv("GOOGLE_FORMS_CLIENT_ID", ""))
 GOOGLE_FORMS_CLIENT_SECRET = os.getenv("FORMS_CLIENT_SECRET", os.getenv("GOOGLE_FORMS_CLIENT_SECRET", ""))
-GOOGLE_FORMS_REDIRECT_URI = os.getenv("GOOGLE_FORMS_REDIRECT_URI", "http://localhost:8000/oauth/callback/google-forms")
+GOOGLE_FORMS_REDIRECT_URI = os.getenv("GOOGLE_FORMS_REDIRECT_URI", "http://localhost:8002/oauth/callback/google-forms")
 GOOGLE_FORMS_SCOPES = [
     "https://www.googleapis.com/auth/forms.body",
     "https://www.googleapis.com/auth/forms.body.readonly",
     "https://www.googleapis.com/auth/forms.responses.readonly",
     "https://www.googleapis.com/auth/drive.file",
 ]
+
+# Email IMAP settings (.env: EMAIL_IMAP_HOST / EMAIL_IMAP_PORT / EMAIL_IMAP_SSL / EMAIL_USERNAME / EMAIL_PASSWORD)
+EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "imap.gmail.com")
+EMAIL_IMAP_PORT = int(os.getenv("EMAIL_IMAP_PORT", "993"))
+EMAIL_IMAP_SSL = os.getenv("EMAIL_IMAP_SSL", "true").lower() == "true"
+EMAIL_USERNAME = os.getenv("EMAIL_USERNAME", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")  # App password for Gmail/Outlook
+EMAIL_DEFAULT_FOLDER = os.getenv("EMAIL_DEFAULT_FOLDER", "INBOX")
+EMAIL_MAX_RESULTS = int(os.getenv("EMAIL_MAX_RESULTS", "20"))
+EMAIL_FETCH_BODY = os.getenv("EMAIL_FETCH_BODY", "true").lower() == "true"

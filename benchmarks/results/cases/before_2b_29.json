@@ -1,0 +1,44 @@
+{
+  "case": {
+    "prompt": "I need to choose between microservices and a monolith for a small team's new product. Compare the tradeoffs and give a recommendation.",
+    "expected_intent": "reasoning",
+    "expected_fine_intent": "design_strategy",
+    "expected_provider_class": "reasoning",
+    "max_latency": 180
+  },
+  "result": {
+    "prompt": "I need to choose between microservices and a monolith for a small team's new product. Compare the tradeoffs and give a recommendation.",
+    "intent": "reasoning",
+    "expected_intent": "reasoning",
+    "intent_accuracy": 1.0,
+    "fine_intent": "design_strategy",
+    "expected_provider_class": "reasoning",
+    "final_provider": "nemotron_ultra",
+    "provider_class_match": true,
+    "tools_called": [
+      "web_search"
+    ],
+    "tool_accuracy": 1.0,
+    "keyword_recall": 0.0,
+    "intent_latency_ms": 7003.2,
+    "routing_latency_ms": 11107.0,
+    "total_latency_ms": 83435.5,
+    "max_latency_s": 180,
+    "latency_ok": true,
+    "providers_attempted": [],
+    "fallback_count": 0,
+    "cost": {
+      "tokens_input_total": 0,
+      "tokens_output_total": 0,
+      "cost_usd_total": 0.002746
+    },
+    "passed": true,
+    "reply_preview": "Based on the research completed, here's the summary:\n\n**What was done:** Four research steps were completed examining microservices vs monolith tradeoffs for sm",
+    "request_id": "47e74668-45b",
+    "classifier_path": "local_nn",
+    "classifier_confidence": 0.601,
+    "classifier_raw": null,
+    "fine_intent_actual": null,
+    "fine_confidence_actual": 0.0
+  }
+}
